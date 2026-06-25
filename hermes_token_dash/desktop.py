@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import sys
 import threading
+import time
+import urllib.request
 
 import uvicorn
 import webview
@@ -23,6 +25,14 @@ def main():
 
     server_thread = threading.Thread(target=run_server, daemon=True)
     server_thread.start()
+
+    # Wait for server to be ready (max 10s)
+    for _ in range(50):
+        try:
+            urllib.request.urlopen("http://127.0.0.1:8765/api/summary", timeout=0.5)
+            break
+        except Exception:
+            time.sleep(0.2)
 
     # Open native desktop window
     window = webview.create_window(
