@@ -4,8 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Hermes Token 用量仪表盘</title>
-<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
   :root {
     --bg: #0a0e14;
@@ -258,13 +256,7 @@
 </style>
 </head>
 <body>
-<div id="loading" style="display:flex;align-items:center;justify-content:center;height:100vh;background:var(--bg);color:var(--muted);font-family:'Segoe UI',sans-serif;font-size:16px;">
-  <div style="text-align:center;">
-    <div style="font-size:28px;margin-bottom:12px;">◈</div>
-    <div>加载中...</div>
-  </div>
-</div>
-<div id="app" style="display:none;">
+<div id="app">
   <!-- title bar -->
   <div class="title-bar">
     <span class="logo">◈</span>
@@ -469,6 +461,8 @@
   </div>
 </div>
 
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <script>
 const { createApp, ref, computed, onMounted, onUnmounted, watch, nextTick } = Vue
 
@@ -720,8 +714,6 @@ createApp({
 
     // lifecycle
     onMounted(async () => {
-      document.getElementById('loading').style.display = 'none'
-      document.getElementById('app').style.display = ''
       await refreshAll()
       if (refreshMs.value > 0) startAuto()
     })
