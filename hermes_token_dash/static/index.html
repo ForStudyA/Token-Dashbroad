@@ -718,8 +718,7 @@ createApp({
         await refreshAll()
         if (refreshMs.value > 0) startAuto()
       } catch(e) {
-        document.body.innerHTML = '<div style="color:#f26d78;padding:40px;font-family:monospace;"><h2>Error</h2><pre>'+e.message+'</pre></div>'
-        console.error(e)
+        document.body.innerHTML = '<div style=\"color:#f26d78;padding:40px;font-family:monospace;\"><h2>加载错误</h2><pre>'+e.message+'</pre></div>'
       }
     })
     onUnmounted(stopAuto)
