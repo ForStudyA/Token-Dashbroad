@@ -258,6 +258,7 @@
 </style>
 </head>
 <body>
+<div id="diag" style="background:#f26d78;color:#fff;padding:4px 16px;font-size:13px;">等待 Vue 挂载...</div>
 <div id="app">
   <!-- title bar -->
   <div class="title-bar">
@@ -714,6 +715,7 @@ createApp({
 
     // lifecycle
     onMounted(async () => {
+      document.getElementById('diag').style.display = 'none'
       try {
         await refreshAll()
         if (refreshMs.value > 0) startAuto()
