@@ -205,20 +205,26 @@ def all_records(claude_records, hermes_records):
 
 @pytest.fixture
 def test_client(temp_jsonl_file, temp_hermes_db):
-    """FastAPI TestClient with parser paths patched to use test data."""
-    from hermes_token_dash.server import app
+    """FastAPI TestClient with _get_records patched to return only test data.
 
-    # Clear the module-level cache before each test
-    import hermes_token_dash.server as server_mod
-    server_mod._cache = []
+    We patch ``_get_records`` directly instead of the lower-level parser
+    functions because the server caches parsed data in a module-level
+    ``_cache`` list.  Patching ``_get_records`` ensures every endpoint
+    sees ONLY the test data, never real disk data."""
+    from hermes_token_dash import parser_claude, parser_hermes, server
 
-    with patch(
-        "hermes_token_dash.parser_claude.scan_claude_jsonls",
-        return_value=[temp_jsonl_file],
-    ), patch(
-        "hermes_token_dash.parser_hermes._discover_hermes_dbs",
-        return_value=[temp_hermes_db],
-    ):
+    # Clear the module-level cache and force re-parse with test-only sources
+    server._cache = []
+
+    # Parse test data once with patched DB discovery
+    with patch.object(parser_hermes, "_discover_hermes_dbs",
+                      return_value=[temp_hermes_db]):
+        hermes = parser_hermes.parse_hermes_sessions()
+
+    claude = parser_claude.parse_jsonl(temp_jsonl_file)
+    test_records = claude + hermes
+
+    with patch.object(server, "_get_records", return_value=test_records):
         from fastapi.testclient import TestClient
-        client = TestClient(app)
+        client = TestClient(server.app)
         yield client
