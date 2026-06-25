@@ -258,7 +258,13 @@
 </style>
 </head>
 <body>
-<div id="app">
+<div id="loading" style="display:flex;align-items:center;justify-content:center;height:100vh;background:var(--bg);color:var(--muted);font-family:'Segoe UI',sans-serif;font-size:16px;">
+  <div style="text-align:center;">
+    <div style="font-size:28px;margin-bottom:12px;">◈</div>
+    <div>加载中...</div>
+  </div>
+</div>
+<div id="app" style="display:none;">
   <!-- title bar -->
   <div class="title-bar">
     <span class="logo">◈</span>
@@ -714,6 +720,8 @@ createApp({
 
     // lifecycle
     onMounted(async () => {
+      document.getElementById('loading').style.display = 'none'
+      document.getElementById('app').style.display = ''
       await refreshAll()
       if (refreshMs.value > 0) startAuto()
     })

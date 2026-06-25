@@ -44,6 +44,13 @@ _cache: list = []
 _cache_time: str = ""
 
 
+@app.on_event("startup")
+async def _preload():
+    """Pre-load data on startup so first request is instant."""
+    import asyncio
+    await asyncio.to_thread(_load_cache)
+
+
 def _load_cache() -> list:
     """Scan and parse all JSONL files + Hermes session DBs.  Cached until next refresh."""
     global _cache
