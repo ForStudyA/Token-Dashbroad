@@ -1,39 +1,209 @@
 <!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Hermes 仪表盘</title>
+<html lang="zh"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Hermes 仪表盘</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
-body{background:#0a0e14;color:#bfc9d9;font-family:'Segoe UI',sans-serif;padding:40px;font-size:18px;}
-h1{color:#39bae6;} .ok{color:#7fd962;} .err{color:#f26d78;}
-.chart-box{background:#181e28;border:1px solid #1e2836;border-radius:10px;padding:16px;max-width:700px;height:260px;margin-top:16px;}
+:root{--bg:#0a0e14;--surface:#12171f;--card:#181e28;--border:#1e2836;--accent:#39bae6;--green:#7fd962;--yellow:#e6b450;--red:#f26d78;--text:#bfc9d9;--muted:#5c6778;--white:#e6eaf0;--hilight:#1f2a3c;--sbg:#15223b}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;height:100vh;overflow:hidden;font-size:14px;-webkit-font-smoothing:antialiased}
+#app{height:100vh;display:flex;flex-direction:column}
+
+/* bars */
+.title-bar{background:var(--surface);height:48px;display:flex;align-items:center;padding:0 20px;flex-shrink:0;border-bottom:1px solid var(--border);gap:8px}
+.title-bar h1{font-size:16px;font-weight:700;color:var(--white)}
+.title-bar .badge{margin-left:auto;font-size:12px;color:var(--muted)}
+.title-bar .badge b{color:var(--white)}
+
+.toolbar{background:var(--surface);height:44px;display:flex;align-items:center;padding:0 16px;gap:10px;flex-shrink:0;border-bottom:1px solid var(--border)}
+.toolbar select{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:13px;cursor:pointer;outline:none}
+.toolbar select:focus{border-color:var(--accent)}
+.btn{background:var(--accent);color:var(--bg);border:none;border-radius:6px;padding:6px 16px;font-size:13px;font-weight:600;cursor:pointer}
+.btn:hover{opacity:.85}
+
+/* body */
+.body{display:flex;flex:1;overflow:hidden}
+.sidebar{width:220px;background:var(--surface);flex-shrink:0;display:flex;flex-direction:column;padding:16px 12px;border-right:1px solid var(--border);overflow-y:auto}
+.sidebar::-webkit-scrollbar{width:4px}
+.sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.slabel{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent);margin-bottom:8px;font-weight:600}
+.mitem{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:4px;cursor:pointer;font-size:13px}
+.mitem:hover{background:var(--hilight)}
+.mitem.active{background:var(--hilight);color:var(--accent)}
+.mitem .cnt{margin-left:auto;font-size:11px;color:var(--muted)}
+.scard{background:var(--card);border-radius:8px;padding:14px;margin-top:16px}
+.srow{display:flex;justify-content:space-between;padding:3px 0;font-size:12px}
+.srow .l{color:var(--muted)}
+.srow .v{font-weight:600;color:var(--white)}
+.srow .v.g{color:var(--green)}.srow .v.y{color:var(--yellow)}.srow .v.r{color:var(--red)}
+.sdiv{border:none;border-top:1px solid var(--border);margin:4px 0}
+
+/* main */
+.main{flex:1;overflow-y:auto;display:flex;flex-direction:column}
+.main::-webkit-scrollbar{width:6px}
+.main::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.charts-row{display:flex;gap:12px;padding:12px 16px;flex-shrink:0;height:240px}
+.cbox{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px;flex:1}
+.cbox canvas{width:100%!important;height:100%!important}
+
+/* tabs */
+.tabs{display:flex;padding:0 16px;flex-shrink:0;border-bottom:1px solid var(--border)}
+.tab{padding:10px 20px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;user-select:none}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+/* tables */
+.twrap{flex:1;overflow-y:auto}
+.twrap::-webkit-scrollbar{width:6px}
+.twrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+.thdr{display:flex;align-items:center;padding:10px 16px;font-size:11px;font-weight:600;color:var(--accent);text-transform:uppercase;letter-spacing:1px;background:var(--card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:1}
+.thdr span{cursor:pointer}
+.thdr span:hover{color:var(--white)}
+.row{display:flex;padding:8px 16px;font-size:13px;border-bottom:1px solid rgba(48,54,61,.4);align-items:center}
+.row:hover{background:var(--hilight)}
+.row.sum{background:var(--sbg);font-weight:700;color:var(--white)}
+.row.sep{border-bottom:2px solid var(--border);padding:0;height:0}
+
+/* progress */
+.pwrap{display:flex;align-items:center;gap:8px}
+.pbar{flex:1;height:6px;background:var(--border);border-radius:3px;overflow:hidden}
+.pfill{height:100%;border-radius:3px}
+.pfill.g{background:var(--green)}.pfill.y{background:var(--yellow)}.pfill.r{background:var(--red)}
+.ppct{font-size:12px;font-weight:600;width:44px;text-align:right}
+.ppct.g{color:var(--green)}.ppct.y{color:var(--yellow)}.ppct.r{color:var(--red)}
+
+/* utils */
+.tr{text-align:right}.tc{text-align:center}
+.empty{padding:40px;text-align:center;color:var(--muted);font-size:14px}
+.trunc{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sbadge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600}
+.sbadge.c{background:rgba(57,186,230,.15);color:var(--accent)}
+.sbadge.h{background:rgba(127,217,98,.15);color:var(--green)}
+.cbadge{display:inline-block;padding:1px 5px;border-radius:3px;font-size:10px;background:rgba(230,180,80,.12);color:var(--yellow)}
+.paginate{display:flex;align-items:center;justify-content:center;gap:8px;padding:12px 16px;flex-shrink:0}
+.paginate button{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 10px;font-size:12px;cursor:pointer}
+.paginate button:disabled{opacity:.4}
+.paginate span{font-size:12px;color:var(--muted)}
+.paginate input{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:3px 6px;font-size:12px;width:44px;text-align:center}
+.sbar{background:var(--surface);height:24px;display:flex;align-items:center;padding:0 16px;font-size:11px;color:var(--muted);border-top:1px solid var(--border);flex-shrink:0}
 </style></head>
 <body>
 <div id="app">
-  <h1>Hermes 仪表盘</h1>
-  <p v-if="ready" class="ok">✅ Vue + Chart.js + API 全部正常！请求数: {{ summary.requests }}</p>
-  <p v-if="!ready">⏳ 加载中...</p>
-  <p v-if="error" class="err">❌ {{ error }}</p>
-  <div class="chart-box"><canvas ref="c"></canvas></div>
+<div class="title-bar"><h1>Hermes 仪表盘</h1>
+<div class="badge"><b>{{ timeLabel }}</b> · <b>{{ summary.requests }}</b> 次请求 · <b>¥{{ summary.cost }}</b></div></div>
+
+<div class="toolbar">
+<select v-model="timeFilter" @change="refreshAll"><option value="all">全部</option><option value="today">今天</option><option value="7d">最近7天</option><option value="30d">最近30天</option></select>
+<select v-model="sourceFilter" @change="refreshAll"><option value="">全部工具</option><option value="claude">Claude Code</option><option value="hermes">Hermes</option></select>
+<select v-model="activeModel" @change="refreshAll"><option value="">全部模型</option><option v-for="m in models" :value="m.name">{{m.name}}</option></select>
+<select v-model="refreshMs"><option value="0">手动</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
+<button class="btn" @click="refreshAll">↻ 刷新</button>
+<span style="margin-left:auto;font-size:11px;color:var(--muted)">{{lastRefresh}}</span>
 </div>
+
+<div class="body">
+<div class="sidebar">
+<div class="slabel">模型</div>
+<div class="mitem" :class="{active:activeModel===''}" @click="activeModel='';refreshAll()"><span>全部</span><span class="cnt">{{modelsTotal}}</span></div>
+<div class="mitem" v-for="m in models" :class="{active:activeModel===m.name}" @click="activeModel=m.name;refreshAll()"><span class="trunc">{{m.name}}</span><span class="cnt">{{m.count}}</span></div>
+
+<div class="scard"><div class="slabel">汇总</div>
+<div class="srow"><span class="l">输入</span><span class="v">{{fmt(summary.input)}}</span></div>
+<div class="srow"><span class="l">输出</span><span class="v">{{fmt(summary.output)}}</span></div>
+<hr class="sdiv">
+<div class="srow"><span class="l">缓存读取</span><span class="v g">{{fmt(totalCR)}}</span></div>
+<div class="srow"><span class="l">缓存写入</span><span class="v">{{fmt(totalCC)}}</span></div>
+<hr class="sdiv">
+<div class="srow"><span class="l">费用</span><span class="v g">¥{{summary.cost}}</span></div>
+<div class="srow"><span class="l">命中率</span><span class="v" :class="hitColor(summary.hit_rate)">{{summary.hit_rate}}%</span></div></div>
+</div>
+
+<div class="main">
+<div class="charts-row">
+<div class="cbox"><canvas ref="tc"></canvas></div>
+<div class="cbox"><canvas ref="cc"></canvas></div>
+</div>
+
+<div class="tabs">
+<div class="tab" :class="{active:tab==='stats'}" @click="tab='stats'">模型统计</div>
+<div class="tab" :class="{active:tab==='providers'}" @click="onTab('providers')">提供商</div>
+<div class="tab" :class="{active:tab==='logs'}" @click="onTab('logs')">请求日志</div>
+</div>
+
+<div class="twrap" v-show="tab==='stats'">
+<div class="thdr"><span @click="toggleSort('model')" style="flex:2">模型</span><span @click="toggleSort('date')" style="width:110px">日期</span><span @click="toggleSort('input')" class="tr" style="width:100px">输入</span><span @click="toggleSort('output')" class="tr" style="width:100px">输出</span><span @click="toggleSort('requests')" class="tc" style="width:70px">请求</span><span style="width:140px">命中率</span><span @click="toggleSort('cost')" class="tr" style="width:80px">费用</span></div>
+<template v-if="sorted.length">
+<div class="row sum"><span style="flex:2">◆ TOTAL ({{summary.groups}} groups)</span><span style="width:110px">—</span><span class="tr" style="width:100px">{{fmt(summary.input)}}</span><span class="tr" style="width:100px">{{fmt(summary.output)}}</span><span class="tc" style="width:70px">{{summary.requests}}</span><span style="width:140px"><div class="pwrap"><div class="pbar"><div class="pfill" :class="hitColor(summary.hit_rate)" :style="{width:summary.hit_rate+'%'}"></div></div><span class="ppct" :class="hitColor(summary.hit_rate)">{{summary.hit_rate}}%</span></div></span><span class="tr" style="width:80px">¥{{summary.cost}}</span></div>
+<div class="row sep"></div>
+<div class="row" v-for="s in sorted" :key="s.model+s.date"><span class="trunc" style="flex:2">{{s.model}}</span><span style="width:110px">{{s.date}}</span><span class="tr" style="width:100px">{{fmt(s.input)}}</span><span class="tr" style="width:100px">{{fmt(s.output)}}</span><span class="tc" style="width:70px">{{s.requests}}</span><span style="width:140px"><div class="pwrap"><div class="pbar"><div class="pfill" :class="hitColor(s.hit_rate)" :style="{width:s.hit_rate+'%'}"></div></div><span class="ppct" :class="hitColor(s.hit_rate)">{{s.hit_rate}}%</span></div></span><span class="tr" style="width:80px">¥{{s.cost.toFixed(4)}}</span></div>
+</template><div class="empty" v-else>暂无数据</div>
+</div>
+
+<div class="twrap" v-show="tab==='providers'">
+<div class="thdr"><span style="flex:1">提供商</span><span class="tr" style="width:90px">请求</span><span class="tr" style="width:100px">输入</span><span class="tr" style="width:100px">输出</span><span class="tc" style="width:70px">成功率</span><span class="tr" style="width:80px">费用</span></div>
+<div class="row" v-for="p in pstats" :key="p.provider"><span class="trunc" style="flex:1">{{p.provider}}</span><span class="tr" style="width:90px">{{p.request_count}}</span><span class="tr" style="width:100px">{{fmt(p.total_input_tokens)}}</span><span class="tr" style="width:100px">{{fmt(p.total_output_tokens)}}</span><span class="tc" style="width:70px" :class="p.success_rate>=99?'g':p.success_rate>=90?'y':'r'">{{p.success_rate}}%</span><span class="tr" style="width:80px">¥{{p.total_cost.toFixed(4)}}</span></div>
+<div class="empty" v-if="!pstats.length">暂无数据</div>
+</div>
+
+<div class="twrap" v-show="tab==='logs'">
+<div class="thdr"><span style="width:70px">来源</span><span style="flex:1">模型</span><span class="tr" style="width:70px">输入</span><span class="tr" style="width:70px">输出</span><span class="tr" style="width:80px">缓存</span><span class="tr" style="width:70px">费用</span><span style="width:80px">时间</span></div>
+<div class="row" v-for="l in logItems" :key="l.request_id"><span style="width:70px"><span class="sbadge" :class="l.data_source==='hermes'?'h':'c'">{{l.data_source==='hermes'?'Hermes':'Claude'}}</span></span><span class="trunc" style="flex:1" :title="l.model">{{l.model}}</span><span class="tr" style="width:70px">{{fmt(l.input_tokens)}}</span><span class="tr" style="width:70px">{{fmt(l.output_tokens)}}</span><span style="width:80px"><template v-if="l.cache_read||l.cache_creation"><span class="cbadge" v-if="l.cache_read">R{{fmt(l.cache_read)}}</span><span class="cbadge" v-if="l.cache_creation">W{{fmt(l.cache_creation)}}</span></template><span v-else style="color:var(--muted)">—</span></span><span class="tr" style="width:70px">¥{{(l.cost||0).toFixed(6)}}</span><span style="width:80px;font-size:11px;color:var(--muted)">{{stime(l.timestamp)}}</span></div>
+<div class="paginate" v-if="logTotal>logLimit"><button :disabled="logPage<=1" @click="logPage--;fetchLogs()">‹</button><span>{{logPage}}/{{Math.ceil(logTotal/logLimit)}} ({{logTotal}}条)</span><button :disabled="logPage>=Math.ceil(logTotal/logLimit)" @click="logPage++;fetchLogs()">›</button></div>
+<div class="empty" v-if="!logItems.length&&!logLoading">暂无日志</div>
+<div class="empty" v-if="logLoading">加载中...</div>
+</div>
+</div></div>
+
+<div class="sbar">就绪 · {{lastRefresh}} · {{modelsTotal}} 条<span style="margin-left:auto">Hermes 仪表盘 v1.4</span></div>
+</div>
+
 <script>
-const {createApp,ref,onMounted,nextTick}=Vue
+const{createApp,ref,computed,onMounted,onUnmounted,nextTick}=Vue
 createApp({setup(){
-  const ready=ref(false),summary=ref({}),error=ref(''),c=ref(null)
-  onMounted(async()=>{
-    try{
-      const r=await fetch('/api/summary'); summary.value=await r.json()
-      const tr=await fetch('/api/trends?time=7d'); const trends=await tr.json()
-      await nextTick()
-      new Chart(c.value,{type:'bar',data:{
-        labels:trends.map(d=>d.date),
-        datasets:[{label:'请求数',data:trends.map(d=>d.requests),backgroundColor:'rgba(57,186,230,0.6)'}]
-      },options:{responsive:true,maintainAspectRatio:false,animation:false,
-        plugins:{legend:{labels:{color:'#5c6778'}}},
-        scales:{x:{ticks:{color:'#5c6778'}},y:{ticks:{color:'#5c6778'}}}
-      }})
-      ready.value=true
-    }catch(e){error.value=e.message}
-  })
-  return{ready,summary,error,c}
+const stats=ref([]),summary=ref({}),models=ref([]),modelsTotal=ref(0)
+const timeFilter=ref('all'),sourceFilter=ref(''),activeModel=ref(''),refreshMs=ref(0),lastRefresh=ref('--:--:--')
+const tc=ref(null),cc=ref(null);let ti=null,ci=null,timer=null
+const tab=ref('stats'),sf=ref('date'),sd=ref(1)
+const logItems=ref([]),logTotal=ref(0),logPage=ref(1),logLimit=20,logLoading=ref(false)
+const pstats=ref([])
+
+const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天'}[timeFilter.value]))
+const totalCR=computed(()=>stats.value.reduce((s,r)=>s+(r.cache_read||0),0))
+const totalCC=computed(()=>stats.value.reduce((s,r)=>s+(r.cache_create||0),0))
+const sorted=computed(()=>{let a=[...stats.value];a.sort((x,y)=>{let vx=x[sf.value]??'',vy=y[sf.value]??'';if(typeof vx==='string'){vx=vx.toLowerCase();vy=vy.toLowerCase()}return vx>vy?sd.value:vx<vy?-sd.value:0});return a})
+
+function fmt(n){if(n==null)return'0';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return String(n)}
+function hitColor(v){return v>=80?'g':v>=40?'y':'r'}
+function stime(iso){if(!iso)return'';return new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
+function toggleSort(f){if(sf.value===f)sd.value*=-1;else{sf.value=f;sd.value=1}}
+
+const q=(p={})=>{let s=new URLSearchParams();Object.entries(p).forEach(([k,v])=>{if(v)s.set(k,v)});return'?'+s.toString()}
+
+async function fetchModels(){try{const r=await fetch('/api/models'+q({source:sourceFilter.value}));const d=await r.json();models.value=d.models;modelsTotal.value=d.total}catch(e){}}
+async function fetchStats(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;const[st,sm]=await Promise.all([fetch('/api/stats'+q(p)).then(r=>r.json()),fetch('/api/summary'+q(p)).then(r=>r.json())]);stats.value=st;summary.value=sm}catch(e){}}
+async function fetchLogs(){logLoading.value=true;try{const p={time:timeFilter.value,page:logPage.value,limit:logLimit};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;const r=await fetch('/api/logs'+q(p));const d=await r.json();logItems.value=d.items||[];logTotal.value=d.total||0}catch(e){}finally{logLoading.value=false}}
+async function fetchProviders(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;const r=await fetch('/api/providers'+q(p));const d=await r.json();pstats.value=Array.isArray(d)?d:[]}catch(e){}}
+async function fetchTrends(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;return await(await fetch('/api/trends'+q(p))).json()}catch(e){return[]}}
+
+function buildCharts(data){if(!data||!data.length)return
+const labels=data.map(d=>d.date)
+if(ti){ti.destroy();ti=null}if(ci){ci.destroy();ci=null}
+ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
+{label:'未命中',data:data.map(d=>Math.max(0,Math.round((d.input-d.cache_read)/1000))),backgroundColor:'rgba(127,217,98,0.65)',borderColor:'#7fd962',borderWidth:1,stack:'s'},
+{label:'缓存命中',data:data.map(d=>Math.round(d.cache_read/1000)),backgroundColor:'rgba(127,217,98,0.25)',borderColor:'#7fd962',borderWidth:1,stack:'s'},
+{label:'输出',data:data.map(d=>Math.round(d.output/1000)),backgroundColor:'rgba(160,200,120,0.45)',borderColor:'#a0c878',borderWidth:1,stack:'s'}
+]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{position:'top',labels:{color:'#5c6778',boxWidth:10,padding:8,font:{size:10}}},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9'},title:{display:true,text:'Token 消耗 (K)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{stacked:true,ticks:{color:'#5c6778',font:{size:9}},beginAtZero:true}}}})
+ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
+{label:'费用',data:data.map(d=>parseFloat(d.cost)||0),backgroundColor:'rgba(230,180,80,0.5)',borderColor:'#e6b450',borderWidth:1}
+]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>'¥'+ctx.raw.toFixed(4)}},title:{display:true,text:'价格 (¥)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{ticks:{color:'#5c6778',font:{size:9},callback:v=>'¥'+v},beginAtZero:true}}})}
+
+async function refreshCharts(){const d=await fetchTrends();await nextTick();buildCharts(d)}
+async function refreshAll(){await Promise.all([fetchModels(),fetchStats(),fetchLogs()]);if(tab.value==='providers')await fetchProviders();await refreshCharts();lastRefresh.value=new Date().toLocaleTimeString()}
+function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
+
+onMounted(async()=>{await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
+onUnmounted(()=>{if(timer)clearInterval(timer)})
+
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,activeModel,refreshMs,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,timeLabel,totalCR,totalCC,sorted,fmt,hitColor,stime,toggleSort,refreshAll,onTab,fetchLogs}
 }}).mount('#app')
 </script></body></html>
