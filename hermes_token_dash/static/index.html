@@ -95,6 +95,7 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 <div class="toolbar">
 <select v-model="timeFilter" @change="refreshAll"><option value="all">全部</option><option value="today">今天</option><option value="7d">最近7天</option><option value="30d">最近30天</option></select>
 <select v-model="sourceFilter" @change="refreshAll"><option value="">全部工具</option><option value="claude">Claude Code</option><option value="hermes">Hermes</option></select>
+<select v-model="profileFilter" @change="refreshAll"><option value="">全部Profile</option><option v-for="p in profiles" :value="p">{{p}}</option></select>
 <select v-model="activeModel" @change="refreshAll"><option value="">全部模型</option><option v-for="m in models" :value="m.name">{{m.name}}</option></select>
 <select v-model="refreshMs"><option value="0">手动</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
 <button class="btn" @click="refreshAll">↻ 刷新</button>
@@ -166,6 +167,7 @@ const tc=ref(null),cc=ref(null);let ti=null,ci=null,timer=null
 const tab=ref('stats'),sf=ref('date'),sd=ref(1)
 const logItems=ref([]),logTotal=ref(0),logPage=ref(1),logLimit=20,logLoading=ref(false)
 const pstats=ref([])
+const profiles=ref([]),profileFilter=ref('')
 
 const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天'}[timeFilter.value]))
 const totalCR=computed(()=>stats.value.reduce((s,r)=>s+(r.cache_read||0),0))
@@ -189,6 +191,7 @@ function buildCharts(data){
 if(ti){ti.destroy();ti=null}
 if(ci){ci.destroy();ci=null}
 if(!data||!data.length)return
+const labels=data.map(d=>d.date)
 ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
 {label:'未命中',data:data.map(d=>Math.max(0,Math.round((d.input-d.cache_read)/1000))),backgroundColor:'rgba(127,217,98,0.65)',borderColor:'#7fd962',borderWidth:1,stack:'s'},
 {label:'缓存命中',data:data.map(d=>Math.round(d.cache_read/1000)),backgroundColor:'rgba(127,217,98,0.25)',borderColor:'#7fd962',borderWidth:1,stack:'s'},
