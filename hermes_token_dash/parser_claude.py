@@ -73,6 +73,8 @@ def parse_jsonl(filepath: Path) -> list[TokenUsage]:
                 except (ValueError, AttributeError):
                     ts = datetime.now(timezone.utc)
 
+                entrypoint = obj.get("entrypoint", "") or ""
+
                 if msg_id in seen:
                     # Streaming duplicate: keep highest token counts, earliest ts
                     existing = seen[msg_id]
@@ -92,6 +94,7 @@ def parse_jsonl(filepath: Path) -> list[TokenUsage]:
                         cache_creation=cache_creation,
                         timestamp=ts,
                         data_source="claude",
+                        agent=entrypoint,
                     )
     except (IOError, OSError) as e:
         logger.warning("Failed to read %s: %s", filepath, e)

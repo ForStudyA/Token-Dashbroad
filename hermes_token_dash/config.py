@@ -13,6 +13,7 @@ HERMES_HOME = Path.home() / "AppData" / "Local" / "hermes"
 HERMES_MAIN_DB = HERMES_HOME / "state.db"
 HERMES_PROFILES_DIR = HERMES_HOME / "profiles"
 CLAUDE_PROJECTS_DIR = Path.home() / ".claude" / "projects"
+CODEX_SESSIONS_DIR = Path.home() / ".codex" / "sessions"
 
 # ── Server defaults ───────────────────────────────────────────
 

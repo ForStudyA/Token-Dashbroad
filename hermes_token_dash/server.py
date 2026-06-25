@@ -27,6 +27,7 @@ from hermes_token_dash.parser_claude import (
     parse_jsonl,
     scan_claude_jsonls,
 )
+from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
 from hermes_token_dash.parser_hermes import parse_hermes_sessions
 
 app = FastAPI(title="Hermes Token Dashboard")
@@ -51,7 +52,7 @@ async def _preload():
 
 
 def _load_cache() -> list:
-    """Scan and parse all JSONL files + Hermes session DBs.  Cached until next refresh."""
+    """Scan and parse all JSONL files + Hermes session DBs + Codex sessions.  Cached until next refresh."""
     global _cache
     records = []
     # Claude Code
@@ -59,6 +60,9 @@ def _load_cache() -> list:
         records.extend(parse_jsonl(f))
     # Hermes Agent
     records.extend(parse_hermes_sessions())
+    # Codex CLI
+    for f in scan_codex_jsonls():
+        records.extend(parse_codex_jsonl(f))
     _cache = records
     return _cache
 
@@ -95,9 +99,25 @@ def api_models(source: str = Query(""), profile: str = Query("")):
         records = [r for r in records if r.profile == profile]
     models = get_available_models(records)
     counts = {m: sum(1 for r in records if r.model == m) for m in models}
+
+    # Per-source model breakdown (when no source filter)
+    by_source: dict[str, dict] = {}
+    if not source:
+        for r in records:
+            s = r.data_source
+            if s not in by_source:
+                by_source[s] = {"source": s, "models": {}, "total_requests": 0}
+            by_source[s]["total_requests"] += 1
+            by_source[s]["models"][r.model] = by_source[s]["models"].get(r.model, 0) + 1
+
     return {
         "models": [{"name": m, "count": counts[m]} for m in models],
         "total": len(records),
+        "by_source": [
+            {"source": s, "total_requests": d["total_requests"],
+             "models": [{"name": m, "count": c} for m, c in sorted(d["models"].items())]}
+            for s, d in sorted(by_source.items(), key=lambda x: -x[1]["total_requests"])
+        ] if not source else [],
     }
 
 
@@ -155,7 +175,49 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
         "requests": tr,
         "hit_rate": hit,
         "groups": len(stats),
+        "by_source": _compute_by_source_summary(records, time) if not source else [],
     }
+
+
+def _compute_by_source_summary(records: list, time: str) -> list[dict]:
+    """Compute per-source aggregated summary."""
+    from collections import defaultdict
+    cutoff = get_time_cutoff(time)
+    filtered = [r for r in records if r.timestamp >= cutoff]
+
+    src: dict[str, dict] = {}
+    for r in filtered:
+        s = r.data_source or "unknown"
+        if s not in src:
+            src[s] = {"source": s, "requests": 0, "input": 0, "output": 0,
+                       "cache_read": 0, "cache_creation": 0, "cost": 0.0,
+                       "models": {}}
+        d = src[s]
+        d["requests"] += 1
+        d["input"] += r.input_tokens
+        d["output"] += r.output_tokens
+        d["cache_read"] += r.cache_read
+        d["cache_creation"] += r.cache_creation
+        in_price, out_price = get_model_price(r.model)
+        d["cost"] += (r.input_tokens / 1_000_000 * in_price
+                      + r.output_tokens / 1_000_000 * out_price)
+        # Per-model counts within source
+        d["models"][r.model] = d["models"].get(r.model, 0) + 1
+
+    result = []
+    for s, d in sorted(src.items(), key=lambda x: -x[1]["requests"]):
+        result.append({
+            "source": s,
+            "requests": d["requests"],
+            "input": d["input"],
+            "output": d["output"],
+            "cache_read": d["cache_read"],
+            "cache_creation": d["cache_creation"],
+            "cost": round(d["cost"], 2),
+            "models": [{"name": m, "count": c} for m, c
+                       in sorted(d["models"].items(), key=lambda x: -x[1])],
+        })
+    return result
 
 
 @app.get("/api/logs")
@@ -308,6 +370,91 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
         })
 
     result.sort(key=lambda x: x["total_cost"], reverse=True)
+    return result
+
+
+@app.get("/api/agents")
+def api_agents(source: str = Query(""), profile: str = Query("")):
+    """List all agents (entrypoint/source field) with request counts."""
+    records = _get_records()
+    if source:
+        records = [r for r in records if r.data_source == source]
+    if profile:
+        records = [r for r in records if r.profile == profile]
+
+    # Count by agent, tracking which source each agent appears in
+    agent_counts: dict[str, dict] = {}
+    for r in records:
+        agent = r.agent or "unknown"
+        if agent not in agent_counts:
+            agent_counts[agent] = {"name": agent, "count": 0, "source": r.data_source}
+        agent_counts[agent]["count"] += 1
+
+    agents = sorted(agent_counts.values(), key=lambda x: -x["count"])
+    return {"agents": agents}
+
+
+@app.get("/api/agent-stats")
+def api_agent_stats(time: str = Query("all"), model: str = Query(""),
+                    source: str = Query(""), profile: str = Query(""),
+                    agent: str = Query("")):
+    """Agent × model cross statistics — one row per (agent, model) combination."""
+    from collections import defaultdict
+
+    records = _get_records()
+    if source:
+        records = [r for r in records if r.data_source == source]
+    if profile:
+        records = [r for r in records if r.profile == profile]
+    cutoff = get_time_cutoff(time)
+
+    filtered = [r for r in records if r.timestamp >= cutoff]
+    if model:
+        filtered = [r for r in filtered if r.model == model]
+    if agent:
+        filtered = [r for r in filtered if (r.agent or "unknown") == agent]
+
+    # Group by (agent, agent_source, model)
+    groups: dict[tuple, dict] = defaultdict(lambda: {
+        "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0,
+        "requests": 0, "requests_cache": 0,
+    })
+
+    for r in filtered:
+        agent = r.agent or "unknown"
+        key = (agent, r.data_source, r.model)
+        d = groups[key]
+        d["input"] += r.input_tokens
+        d["output"] += r.output_tokens
+        d["cache_read"] += r.cache_read
+        d["cache_creation"] += r.cache_creation
+        d["requests"] += 1
+        if r.cache_read > 0:
+            d["requests_cache"] += 1
+
+    result = []
+    for (agent, agent_source, model_name), d in groups.items():
+        hit_rate = round(d["requests_cache"] / d["requests"] * 100, 1) if d["requests"] > 0 else 0
+        in_price, out_price = get_model_price(model_name)
+        cost = round(
+            d["input"] / 1_000_000 * in_price
+            + d["output"] / 1_000_000 * out_price, 4
+        )
+        result.append({
+            "agent": agent,
+            "agent_source": agent_source,
+            "model": model_name,
+            "input": d["input"],
+            "output": d["output"],
+            "cache_read": d["cache_read"],
+            "cache_creation": d["cache_creation"],
+            "requests": d["requests"],
+            "requests_cache": d["requests_cache"],
+            "hit_rate": hit_rate,
+            "cost": cost,
+        })
+
+    result.sort(key=lambda x: (x["agent"], x["model"]))
     return result
 
 

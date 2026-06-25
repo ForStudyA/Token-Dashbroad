@@ -1,0 +1,72 @@
+修改文件 C:/Users/20107/D/code-project/hermes-token-dash/hermes_token_dash/static/index.html，在侧边栏的「汇总」卡片下方添加「按工具」分区，展示每个数据源（Claude Code / Hermes）的 token 用量和模型分解。不询问，直接修改。
+
+## 背景
+项目是 Vue 3 CDN 前端，深色主题。后端 API /api/models 和 /api/summary 现在返回 by_source 字段（当 source 过滤为空时）。
+
+/api/models 新增 by_source 字段，每个元素格式:
+  {"source": "claude", "total_requests": 2635, "models": [{"name": "deepseek-v4-pro", "count": 1892}]}
+
+/api/summary 新增 by_source 字段，每个元素格式:
+  {"source": "claude", "requests": 2635, "input": 497M, "output": 52M, "cache_read": 149M, "cache_creation": 21.9M, "cost": 8377.50, "models": [{"name": "deepseek-v4-pro", "count": 1892}]}
+
+## 具体修改
+
+### 1. HTML 模板
+找到 sidebar 中的汇总卡片（class="scard"，内含 class="slabel" 文字"汇总"）。在该卡片的闭合 div 之后、sidebar 闭合 div 之前，插入新卡片:
+
+```
+<div class="scard" style="margin-top:12px">
+  <div class="slabel">按工具</div>
+  <div v-for="src in sourceBreakdown" :key="src.source" style="margin-bottom:8px">
+    <div class="srow">
+      <span class="l"><span class="sbadge" :class="src.source==='hermes'?'h':'c'" style="margin-right:4px">{{src.source==='hermes'?'H':'C'}}</span> {{src.source==='claude'?'Claude Code':src.source==='hermes'?'Hermes':src.source}}</span>
+      <span class="v">{{src.requests}}次</span>
+    </div>
+    <div class="srow"><span class="l" style="padding-left:18px">token</span><span class="v" style="font-size:11px">I{{fmt(src.input)}} O{{fmt(src.output)}}</span></div>
+    <div class="srow" v-if="src.cache_read||src.cache_creation"><span class="l" style="padding-left:18px">缓存</span><span class="v g" style="font-size:11px">R{{fmt(src.cache_read)}} W{{fmt(src.cache_creation)}}</span></div>
+    <div class="srow"><span class="l" style="padding-left:18px">费用</span><span class="v g">Y{{src.cost}}</span></div>
+    <div class="srow" v-for="m in src.models" :key="m.name"><span class="l" style="padding-left:18px;font-size:10px">L {{m.name}}</span><span class="v" style="font-size:10px">{{m.count}}次</span></div>
+    <hr class="sdiv" v-if="src!==sourceBreakdown[sourceBreakdown.length-1]">
+  </div>
+  <div class="empty" v-if="!sourceBreakdown.length" style="padding:8px;font-size:11px">选择工具后隐藏</div>
+</div>
+```
+
+### 2. JS computed 属性
+在 setup() 函数中，找一个合适位置（比如 agentsTotal 所在的那行 computed 之前或之后），添加:
+
+const sourceBreakdown = computed(() => {
+  const sumBySource = summary.value.by_source || [];
+  const modelBySource = models.value.by_source || [];
+  if (!sumBySource.length && !modelBySource.length) return [];
+  const result = [];
+  const allSources = new Set();
+  sumBySource.forEach(s => allSources.add(s.source));
+  modelBySource.forEach(s => allSources.add(s.source));
+  allSources.forEach(src => {
+    const sumEntry = sumBySource.find(s => s.source === src) || {};
+    const modelEntry = modelBySource.find(s => s.source === src) || {};
+    result.push({
+      source: src,
+      requests: sumEntry.requests || modelEntry.total_requests || 0,
+      input: sumEntry.input || 0,
+      output: sumEntry.output || 0,
+      cache_read: sumEntry.cache_read || 0,
+      cache_creation: sumEntry.cache_creation || 0,
+      cost: sumEntry.cost || 0,
+      models: modelEntry.models || []
+    });
+  });
+  result.sort((a, b) => b.requests - a.requests);
+  return result;
+});
+
+### 3. return 语句
+在 setup() 的 return 对象中添加 sourceBreakdown。找到 return{...} 那行，在花括号内添加 sourceBreakdown。
+
+## 注意事项
+- 货币符号是人民币元符号
+- 使用现有 CSS 类: .scard, .slabel, .srow, .sdiv, .sbadge, .empty
+- 不新增 CSS 规则
+- 不要改动任何现有代码，只添加新内容
+- source 名称映射: claude => Claude Code, hermes => Hermes

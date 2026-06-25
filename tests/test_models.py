@@ -222,7 +222,7 @@ class TestExtractProvider:
         """Every model in MODEL_PRICING starts with its provider."""
         for model_name in MODEL_PRICING:
             provider = extract_provider(model_name)
-            assert provider in ("deepseek", "mimo", "claude", "qwen", "qwen3"), (
+            assert provider in ("deepseek", "mimo", "claude"), (
                 f"{model_name!r} extracted as {provider!r}"
             )
 
@@ -474,7 +474,7 @@ class TestModelPricingDict:
 
     def test_known_model_count(self):
         """We currently have 6 models defined."""
-        assert len(MODEL_PRICING) == 10
+        assert len(MODEL_PRICING) == 6
 
     def test_deepseek_v4_pro_pricing(self):
         mp = MODEL_PRICING["deepseek-v4-pro"]
