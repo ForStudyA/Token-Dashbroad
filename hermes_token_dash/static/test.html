@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Test</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+body{background:#0a0e14;color:#bfc9d9;font-family:monospace;padding:20px;}
+</style></head><body>
+<div id="app">
+  <h2 v-if="ready">Vue OK. API: {{api}}</h2>
+  <h2 v-else>Loading...</h2>
+  <p v-if="err" style="color:#f26d78">{{err}}</p>
+</div>
+<script>
+const {createApp,ref,onMounted}=Vue
+createApp({setup(){
+  const ready=ref(false),api=ref(''),err=ref('')
+  onMounted(async()=>{
+    try{
+      const r=await fetch('/api/summary')
+      const d=await r.json()
+      api.value='requests='+d.requests+' cost='+d.cost
+      ready.value=true
+    }catch(e){err.value=e.message}
+  })
+  return{ready,api,err}
+}}).mount('#app')
+</script></body></html>
