@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import webbrowser
 from pathlib import Path
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Query
@@ -74,6 +73,17 @@ def _get_records(force: bool = False) -> list:
 @app.get("/")
 def index():
     return FileResponse(str(STATIC / "index.html"))
+
+
+@app.get("/api/profiles")
+def api_profiles():
+    """Return list of available Hermes profiles found in the data."""
+    records = _get_records()
+    profiles = sorted({
+        (r.profile or "default")
+        for r in records if r.data_source == "hermes"
+    })
+    return {"profiles": profiles}
 
 
 @app.get("/api/models")

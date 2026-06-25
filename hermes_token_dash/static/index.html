@@ -181,11 +181,13 @@ function toggleSort(f){if(sf.value===f)sd.value*=-1;else{sf.value=f;sd.value=1}}
 
 const q=(p={})=>{let s=new URLSearchParams();Object.entries(p).forEach(([k,v])=>{if(v)s.set(k,v)});return'?'+s.toString()}
 
-async function fetchModels(){try{const r=await fetch('/api/models'+q({source:sourceFilter.value}));const d=await r.json();models.value=d.models;modelsTotal.value=d.total}catch(e){}}
-async function fetchStats(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;const[st,sm]=await Promise.all([fetch('/api/stats'+q(p)).then(r=>r.json()),fetch('/api/summary'+q(p)).then(r=>r.json())]);stats.value=st;summary.value=sm}catch(e){}}
-async function fetchLogs(){logLoading.value=true;try{const p={time:timeFilter.value,page:logPage.value,limit:logLimit};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;const r=await fetch('/api/logs'+q(p));const d=await r.json();logItems.value=d.items||[];logTotal.value=d.total||0}catch(e){}finally{logLoading.value=false}}
-async function fetchProviders(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;const r=await fetch('/api/providers'+q(p));const d=await r.json();pstats.value=Array.isArray(d)?d:[]}catch(e){}}
-async function fetchTrends(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;return await(await fetch('/api/trends'+q(p))).json()}catch(e){return[]}}
+async function fetchProfiles(){try{const r=await fetch('/api/profiles');const d=await r.json();profiles.value=d.profiles||[]}catch(e){}}
+
+async function fetchModels(){try{const r=await fetch('/api/models'+q({source:sourceFilter.value,profile:profileFilter.value}));const d=await r.json();models.value=d.models;modelsTotal.value=d.total}catch(e){}}
+async function fetchStats(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;const[st,sm]=await Promise.all([fetch('/api/stats'+q(p)).then(r=>r.json()),fetch('/api/summary'+q(p)).then(r=>r.json())]);stats.value=st;summary.value=sm}catch(e){}}
+async function fetchLogs(){logLoading.value=true;try{const p={time:timeFilter.value,page:logPage.value,limit:logLimit};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;const r=await fetch('/api/logs'+q(p));const d=await r.json();logItems.value=d.items||[];logTotal.value=d.total||0}catch(e){}finally{logLoading.value=false}}
+async function fetchProviders(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;const r=await fetch('/api/providers'+q(p));const d=await r.json();pstats.value=Array.isArray(d)?d:[]}catch(e){}}
+async function fetchTrends(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;return await(await fetch('/api/trends'+q(p))).json()}catch(e){return[]}}
 
 function buildCharts(data){
 if(ti){ti.destroy();ti=null}
@@ -202,13 +204,13 @@ ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
 ]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>'¥'+ctx.raw.toFixed(4)}},title:{display:true,text:'价格 (¥)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{ticks:{color:'#5c6778',font:{size:9},callback:v=>'¥'+v},beginAtZero:true}}})}
 
 async function refreshCharts(){const d=await fetchTrends();await nextTick();buildCharts(d)}
-async function refreshAll(){await Promise.all([fetchModels(),fetchStats(),fetchLogs()]);if(tab.value==='providers')await fetchProviders();await refreshCharts();lastRefresh.value=new Date().toLocaleTimeString()}
+async function refreshAll(){await Promise.all([fetchProfiles(),fetchModels(),fetchStats(),fetchLogs()]);if(tab.value==='providers')await fetchProviders();await refreshCharts();lastRefresh.value=new Date().toLocaleTimeString()}
 function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
 
 onMounted(async()=>{await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
 watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,activeModel,refreshMs,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,timeLabel,totalCR,totalCC,sorted,fmt,hitColor,stime,toggleSort,refreshAll,onTab,fetchLogs}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,timeLabel,totalCR,totalCC,sorted,fmt,hitColor,stime,toggleSort,refreshAll,onTab,fetchLogs}
 }}).mount('#app')
 </script></body></html>

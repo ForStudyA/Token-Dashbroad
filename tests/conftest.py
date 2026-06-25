@@ -1,230 +1,182 @@
-"""Shared fixtures for hermes-token-dash integration tests."""
+"""测试配置：共用 fixtures 与 mock 设置。
 
-import json
-import os
-import sqlite3
-import tempfile
-from datetime import datetime, timezone
+Mock 所有 parser 层函数，避免测试读磁盘。
+"""
+
+from __future__ import annotations
+
+import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
+from fastapi.testclient import TestClient
+
+# 项目根加入 path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from hermes_token_dash.models import ModelPricing, ModelStats, TokenUsage
+
+# ── Sample 数据 ────────────────────────────────────────────────────
+
+SAMPLE_PRICING = {
+    "test-model-a": ModelPricing(1.0, 2.0, 0.1, 0.2),
+    "test-model-b": ModelPricing(3.0, 6.0, 0.3, 0.6),
+    "deepseek-v4-pro": ModelPricing(0.55, 0.19),
+}
 
 
-# ── Test data: Claude Code JSONL records ────────────────────────────────
-CLAUDE_RECORDS = [
-    {
-        "type": "assistant",
-        "message": {
-            "id": "req-001",
-            "model": "deepseek-v4-pro",
-            "usage": {
-                "input_tokens": 1500,
-                "output_tokens": 800,
-                "cache_read_input_tokens": 200,
-                "cache_creation_input_tokens": 0,
-            },
-        },
-        "timestamp": "2026-06-20T10:00:00Z",
-    },
-    {
-        "type": "assistant",
-        "message": {
-            "id": "req-002",
-            "model": "claude-sonnet-4-6-20250526",
-            "usage": {
-                "input_tokens": 3000,
-                "output_tokens": 1200,
-                "cache_read_input_tokens": 0,
-                "cache_creation_input_tokens": 500,
-            },
-        },
-        "timestamp": "2026-06-20T14:00:00Z",
-    },
-    {
-        "type": "assistant",
-        "message": {
-            "id": "req-003",
-            "model": "mimo-v2.5",
-            "usage": {
-                "input_tokens": 500,
-                "output_tokens": 2500,
-                "cache_read_input_tokens": 0,
-                "cache_creation_input_tokens": 0,
-            },
-        },
-        "timestamp": "2026-06-21T09:00:00Z",
-    },
-    # Streaming duplicate for req-001 (higher token counts should win)
-    {
-        "type": "assistant",
-        "message": {
-            "id": "req-001",
-            "model": "deepseek-v4-pro",
-            "usage": {
-                "input_tokens": 2000,
-                "output_tokens": 1000,
-                "cache_read_input_tokens": 300,
-                "cache_creation_input_tokens": 0,
-            },
-        },
-        "timestamp": "2026-06-20T10:00:01Z",
-    },
-    # Malformed line (should be skipped)
-    '{"type": "assistant"}',
-    # Non-assistant type (should be skipped)
-    {
-        "type": "user",
-        "message": {
-            "id": "req-999",
-            "model": "deepseek-v4-pro",
-            "usage": {"input_tokens": 9999, "output_tokens": 9999},
-        },
-        "timestamp": "2026-06-20T12:00:00Z",
-    },
-    # Synthetic model (should be skipped)
-    {
-        "type": "assistant",
-        "message": {
-            "id": "req-synth",
-            "model": "<synthetic>",
-            "usage": {"input_tokens": 100, "output_tokens": 100},
-        },
-        "timestamp": "2026-06-20T11:00:00Z",
-    },
-]
-
-# ── Test data: Hermes session DB rows ───────────────────────────────────
-HERMES_SESSIONS = [
-    (
-        "session-a",
-        "mimo-v2.5-pro",
-        2000,
-        1000,
-        0,
-        0,
-        # 2026-06-20T08:00:00Z
-        int(datetime(2026, 6, 20, 8, 0, 0, tzinfo=timezone.utc).timestamp()),
-        int(datetime(2026, 6, 20, 8, 5, 0, tzinfo=timezone.utc).timestamp()),
-    ),
-    (
-        "session-b",
-        "deepseek-v4-flash",
-        800,
-        3200,
-        100,
-        0,
-        int(datetime(2026, 6, 21, 15, 0, 0, tzinfo=timezone.utc).timestamp()),
-        int(datetime(2026, 6, 21, 15, 10, 0, tzinfo=timezone.utc).timestamp()),
-    ),
-    # Session with zero tokens (should be skipped by query WHERE clause)
-    (
-        "session-empty",
-        "unknown",
-        0,
-        0,
-        0,
-        0,
-        int(datetime(2026, 6, 19, 0, 0, 0, tzinfo=timezone.utc).timestamp()),
-        int(datetime(2026, 6, 19, 0, 1, 0, tzinfo=timezone.utc).timestamp()),
-    ),
-]
-
-
-@pytest.fixture
-def temp_jsonl_file():
-    """Create a temporary JSONL file with known Claude Code records."""
-    with tempfile.NamedTemporaryFile(
-        mode="w", suffix=".jsonl", delete=False, encoding="utf-8"
-    ) as f:
-        for rec in CLAUDE_RECORDS:
-            if isinstance(rec, str):
-                f.write(rec + "\n")
-            else:
-                f.write(json.dumps(rec) + "\n")
-    yield Path(f.name)
-    os.unlink(f.name)
-
-
-@pytest.fixture
-def temp_hermes_db():
-    """Create a temporary SQLite DB mimicking a Hermes state.db."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-
-    conn = sqlite3.connect(path)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT,
-            model TEXT,
-            input_tokens INTEGER,
-            output_tokens INTEGER,
-            cache_read_tokens INTEGER,
-            cache_write_tokens INTEGER,
-            started_at REAL,
-            ended_at REAL
-        )
-    """)
-    conn.executemany(
-        "INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        HERMES_SESSIONS,
+def _make_usage(
+    request_id: str,
+    model: str,
+    input_tokens: int = 1000,
+    output_tokens: int = 500,
+    cache_read: int = 0,
+    cache_creation: int = 0,
+    timestamp: datetime | None = None,
+    data_source: str = "claude",
+    status_code: int = 200,
+    latency_ms: float = 150.0,
+    first_token_ms: float = 50.0,
+) -> TokenUsage:
+    """快速构造一个 TokenUsage 记录。"""
+    if timestamp is None:
+        timestamp = datetime(2026, 6, 25, 10, 0, 0, tzinfo=timezone.utc)
+    return TokenUsage(
+        request_id=request_id,
+        model=model,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read=cache_read,
+        cache_creation=cache_creation,
+        timestamp=timestamp,
+        data_source=data_source,
+        status_code=status_code,
+        latency_ms=latency_ms,
+        first_token_ms=first_token_ms,
     )
-    conn.commit()
-    conn.close()
 
-    yield Path(path)
-    os.unlink(path)
+
+def _make_stats(
+    model: str,
+    date: str,
+    total_input: int = 1000,
+    total_output: int = 500,
+    cache_read: int = 0,
+    cache_create: int = 0,
+    requests: int = 1,
+    requests_cache: int = 0,
+) -> ModelStats:
+    """快速构造 ModelStats。"""
+    s = ModelStats(
+        model=model,
+        date=date,
+        total_input=total_input,
+        total_output=total_output,
+        total_cache_read=cache_read,
+        total_cache_creation=cache_create,
+        request_count=requests,
+        requests_with_cache=requests_cache,
+    )
+    s.compute_derived()
+    return s
+
+
+# 多条测试用 TokenUsage，覆盖多模型、多日期、多状态码
+_now = datetime(2026, 6, 25, 10, 0, 0, tzinfo=timezone.utc)
+_yesterday = _now - timedelta(days=1)
+_week_ago = _now - timedelta(days=8)
+_month_ago = _now - timedelta(days=35)
+
+SAMPLE_USAGES: list[TokenUsage] = [
+    _make_usage("r1", "test-model-a", 2000, 800, 64, 0, _now),
+    _make_usage("r2", "test-model-a", 1500, 600, 0, 128, _now),
+    _make_usage("r3", "test-model-b", 3000, 1200, 0, 0, _yesterday),
+    _make_usage("r4", "test-model-b", 1000, 400, 256, 0, _yesterday, status_code=500),
+    _make_usage("r5", "test-model-a", 500, 200, 0, 0, _week_ago),
+    _make_usage("r6", "test-model-a", 800, 300, 0, 0, _week_ago, data_source="hermes"),
+    _make_usage("r7", "test-model-b", 4000, 2000, 0, 64, _month_ago, latency_ms=300.0),
+    _make_usage("r8", "deepseek-v4-pro", 10000, 5000, 500, 100, _now, latency_ms=0),
+]
+
+SAMPLE_MODELS: list[str] = ["test-model-a", "test-model-b", "deepseek-v4-pro"]
+
+SAMPLE_STATS: list[ModelStats] = [
+    _make_stats("test-model-a", "2026-06-25", 3500, 1400, 64, 128, 2, 1),
+    _make_stats("test-model-b", "2026-06-25", 3000, 1200, 256, 0, 1, 0),
+    _make_stats("test-model-a", "2026-06-24", 1500, 600, 0, 0, 1, 0),
+    _make_stats("test-model-b", "2026-06-17", 1000, 400, 0, 0, 1, 0),
+    _make_stats("test-model-a", "2026-05-21", 800, 300, 0, 0, 1, 0),
+]
+
+
+# ── Mock helpers ────────────────────────────────────────────────────
+
+def _mock_parse_jsonl(_file: Path) -> list[TokenUsage]:
+    """模拟 parse_jsonl：返回 SAMPLE_USAGES。"""
+    return list(SAMPLE_USAGES)
+
+
+def _mock_scan_claude_jsonls() -> list[Path]:
+    """模拟 scan_claude_jsonls：返回一个假文件路径。"""
+    return [Path("/fake/session.jsonl")]
+
+
+def _mock_parse_hermes_sessions() -> list[TokenUsage]:
+    """模拟 parse_hermes_sessions：返回空。"""
+    return []
+
+
+def _mock_aggregate_by_model_date(
+    records: list[TokenUsage], time_filter: str = "all"
+) -> list[ModelStats]:
+    """模拟 aggregate_by_model_date：返回 SAMPLE_STATS 的子集。"""
+    return [s for s in SAMPLE_STATS if _time_matches(s, time_filter)]
+
+
+def _time_matches(s: ModelStats, time_filter: str) -> bool:
+    """简单时间过滤。"""
+    if time_filter == "all":
+        return True
+    # 简化：全部返回
+    return True
+
+
+def _mock_get_available_models(_records: list[TokenUsage]) -> list[str]:
+    return list(SAMPLE_MODELS)
+
+
+# ── Fixtures ────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _mock_parsers(monkeypatch):
+    """自动 mock 所有 parser 层函数。在 server 模块级别替换。"""
+    from hermes_token_dash import server as srv
+
+    monkeypatch.setattr(srv, "scan_claude_jsonls", _mock_scan_claude_jsonls)
+    monkeypatch.setattr(srv, "parse_jsonl", _mock_parse_jsonl)
+    monkeypatch.setattr(srv, "parse_hermes_sessions", _mock_parse_hermes_sessions)
+    monkeypatch.setattr(
+        srv, "aggregate_by_model_date", _mock_aggregate_by_model_date
+    )
+    monkeypatch.setattr(srv, "get_available_models", _mock_get_available_models)
+    # 替换 MODEL_PRICING
+    monkeypatch.setattr(
+        srv, "MODEL_PRICING", SAMPLE_PRICING.copy()
+    )
 
 
 @pytest.fixture
-def claude_records(temp_jsonl_file):
-    """Parse the temp JSONL file and return TokenUsage records."""
-    from hermes_token_dash.parser_claude import parse_jsonl
+def client():
+    """FastAPI TestClient。"""
+    from hermes_token_dash.server import app
 
-    return parse_jsonl(temp_jsonl_file)
-
-
-@pytest.fixture
-def hermes_records(temp_hermes_db):
-    """Parse the temp Hermes DB and return TokenUsage records."""
-    from hermes_token_dash.parser_hermes import parse_hermes_sessions
-    from hermes_token_dash.parser_hermes import _discover_hermes_dbs
-
-    with patch(
-        "hermes_token_dash.parser_hermes._discover_hermes_dbs",
-        return_value=[temp_hermes_db],
-    ):
-        return parse_hermes_sessions()
+    with TestClient(app) as c:
+        yield c
 
 
 @pytest.fixture
-def all_records(claude_records, hermes_records):
-    """Combined Claude + Hermes records."""
-    return claude_records + hermes_records
-
-
-@pytest.fixture
-def test_client(temp_jsonl_file, temp_hermes_db):
-    """FastAPI TestClient with _get_records patched to return only test data.
-
-    We patch ``_get_records`` directly instead of the lower-level parser
-    functions because the server caches parsed data in a module-level
-    ``_cache`` list.  Patching ``_get_records`` ensures every endpoint
-    sees ONLY the test data, never real disk data."""
-    from hermes_token_dash import parser_claude, parser_hermes, server
-
-    # Clear the module-level cache and force re-parse with test-only sources
-    server._cache = []
-
-    # Parse test data once with patched DB discovery
-    with patch.object(parser_hermes, "_discover_hermes_dbs",
-                      return_value=[temp_hermes_db]):
-        hermes = parser_hermes.parse_hermes_sessions()
-
-    claude = parser_claude.parse_jsonl(temp_jsonl_file)
-    test_records = claude + hermes
-
-    with patch.object(server, "_get_records", return_value=test_records):
-        from fastapi.testclient import TestClient
-        client = TestClient(server.app)
-        yield client
+def sample_usages() -> list[TokenUsage]:
+    return list(SAMPLE_USAGES)
