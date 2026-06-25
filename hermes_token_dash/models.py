@@ -97,6 +97,7 @@ class TokenUsage:
     status_code: int = 200
     latency_ms: float = 0.0
     first_token_ms: float = 0.0
+    profile: str = ""
 
 
 @dataclass

@@ -52,6 +52,12 @@ def parse_hermes_sessions() -> list[TokenUsage]:
     records: list[TokenUsage] = []
 
     for db_path in _discover_hermes_dbs():
+        # Determine profile name from db_path
+        if db_path.parent.name == "hermes":
+            profile = "default"
+        else:
+            profile = db_path.parent.name
+
         try:
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
@@ -89,6 +95,7 @@ def parse_hermes_sessions() -> list[TokenUsage]:
                         cache_creation=cache_creation,
                         timestamp=ts,
                         data_source="hermes",
+                        profile=profile,
                     )
                 )
             conn.close()

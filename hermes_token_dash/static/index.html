@@ -158,7 +158,7 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 </div>
 
 <script>
-const{createApp,ref,computed,onMounted,onUnmounted,nextTick}=Vue
+const{createApp,ref,computed,onMounted,onUnmounted,nextTick,watch}=Vue
 createApp({setup(){
 const stats=ref([]),summary=ref({}),models=ref([]),modelsTotal=ref(0)
 const timeFilter=ref('all'),sourceFilter=ref(''),activeModel=ref(''),refreshMs=ref(0),lastRefresh=ref('--:--:--')
@@ -173,7 +173,7 @@ const totalCC=computed(()=>stats.value.reduce((s,r)=>s+(r.cache_create||0),0))
 const sorted=computed(()=>{let a=[...stats.value];a.sort((x,y)=>{let vx=x[sf.value]??'',vy=y[sf.value]??'';if(typeof vx==='string'){vx=vx.toLowerCase();vy=vy.toLowerCase()}return vx>vy?sd.value:vx<vy?-sd.value:0});return a})
 
 function fmt(n){if(n==null)return'0';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return String(n)}
-function hitColor(v){return v>=80?'g':v>=40?'y':'r'}
+function hitColor(v){if(v===0)return'';return v>=80?'g':v>=40?'y':'r'}
 function stime(iso){if(!iso)return'';return new Date(iso).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}
 function toggleSort(f){if(sf.value===f)sd.value*=-1;else{sf.value=f;sd.value=1}}
 
@@ -185,9 +185,10 @@ async function fetchLogs(){logLoading.value=true;try{const p={time:timeFilter.va
 async function fetchProviders(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;const r=await fetch('/api/providers'+q(p));const d=await r.json();pstats.value=Array.isArray(d)?d:[]}catch(e){}}
 async function fetchTrends(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;return await(await fetch('/api/trends'+q(p))).json()}catch(e){return[]}}
 
-function buildCharts(data){if(!data||!data.length)return
-const labels=data.map(d=>d.date)
-if(ti){ti.destroy();ti=null}if(ci){ci.destroy();ci=null}
+function buildCharts(data){
+if(ti){ti.destroy();ti=null}
+if(ci){ci.destroy();ci=null}
+if(!data||!data.length)return
 ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
 {label:'未命中',data:data.map(d=>Math.max(0,Math.round((d.input-d.cache_read)/1000))),backgroundColor:'rgba(127,217,98,0.65)',borderColor:'#7fd962',borderWidth:1,stack:'s'},
 {label:'缓存命中',data:data.map(d=>Math.round(d.cache_read/1000)),backgroundColor:'rgba(127,217,98,0.25)',borderColor:'#7fd962',borderWidth:1,stack:'s'},
@@ -202,6 +203,7 @@ async function refreshAll(){await Promise.all([fetchModels(),fetchStats(),fetchL
 function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
 
 onMounted(async()=>{await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
+watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 
 return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,activeModel,refreshMs,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,timeLabel,totalCR,totalCC,sorted,fmt,hitColor,stime,toggleSort,refreshAll,onTab,fetchLogs}

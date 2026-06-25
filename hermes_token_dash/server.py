@@ -77,10 +77,12 @@ def index():
 
 
 @app.get("/api/models")
-def api_models(source: str = Query("")):
+def api_models(source: str = Query(""), profile: str = Query("")):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
+    if profile:
+        records = [r for r in records if r.profile == profile]
     models = get_available_models(records)
     counts = {m: sum(1 for r in records if r.model == m) for m in models}
     return {
@@ -90,10 +92,12 @@ def api_models(source: str = Query("")):
 
 
 @app.get("/api/stats")
-def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Query("")):
+def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query("")):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
+    if profile:
+        records = [r for r in records if r.profile == profile]
     stats = aggregate_by_model_date(records, time)
 
     if model:
@@ -117,10 +121,12 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
 
 
 @app.get("/api/summary")
-def api_summary(time: str = Query("all"), model: str = Query(""), source: str = Query("")):
+def api_summary(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query("")):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
+    if profile:
+        records = [r for r in records if r.profile == profile]
     stats = aggregate_by_model_date(records, time)
     if model:
         stats = [s for s in stats if s.model == model]
@@ -144,12 +150,14 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
 
 @app.get("/api/logs")
 def api_logs(time: str = Query("all"), model: str = Query(""),
-             source: str = Query(""),
+             source: str = Query(""), profile: str = Query(""),
              page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=500)):
     """Return paginated raw TokenUsage records with timestamps."""
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
+    if profile:
+        records = [r for r in records if r.profile == profile]
     now = datetime.now(timezone.utc)
     today = now.date()
 
@@ -186,6 +194,7 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
             "timestamp": r.timestamp.isoformat(),
             "cost": cost,
             "data_source": r.data_source,
+            "profile": r.profile,
             "status_code": r.status_code,
             "latency_ms": r.latency_ms,
             "first_token_ms": r.first_token_ms,
@@ -195,11 +204,13 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
 
 
 @app.get("/api/trends")
-def api_trends(time: str = Query("30d"), source: str = Query(""), model: str = Query("")):
+def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str = Query(""), model: str = Query("")):
     """Return daily aggregated data for charts: [{date, requests, input, output, cache_read, cost}]."""
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
+    if profile:
+        records = [r for r in records if r.profile == profile]
     if model:
         records = [r for r in records if r.model == model]
     stats = aggregate_by_model_date(records, time)
@@ -222,7 +233,7 @@ def api_trends(time: str = Query("30d"), source: str = Query(""), model: str = Q
 
 
 @app.get("/api/providers")
-def api_providers(time: str = Query("all"), model: str = Query(""), source: str = Query("")):
+def api_providers(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query("")):
     """Return per-provider aggregated stats.
 
     Provider is extracted from each record's model field via
@@ -231,6 +242,8 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
+    if profile:
+        records = [r for r in records if r.profile == profile]
     now = datetime.now(timezone.utc)
     today = now.date()
 
