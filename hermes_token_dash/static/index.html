@@ -1,10 +1,28 @@
 <!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Test</title>
+<html><head><meta charset="UTF-8"><title>Hermes 仪表盘</title>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <style>
-body{background:#0a0e14;color:#39bae6;font-family:'Segoe UI',sans-serif;padding:40px;font-size:20px;}
+body{background:#0a0e14;color:#bfc9d9;font-family:'Segoe UI',sans-serif;padding:40px;font-size:18px;}
+h1{color:#39bae6;} .ok{color:#7fd962;} .err{color:#f26d78;}
 </style></head>
 <body>
-<h1>✅ 静态 HTML 正常</h1>
-<p style="color:#bfc9d9">如果你能看到这行字，说明服务器和 HTML 都没问题。</p>
-<p style="color:#5c6778">请反馈是否能看到这个消息。</p>
-</body></html>
+<div id="app">
+  <h1>Hermes 仪表盘</h1>
+  <p v-if="ready" class="ok">✅ Vue 挂载成功！请求数: {{ summary.requests }} | 费用: ¥{{ summary.cost }}</p>
+  <p v-if="!ready">⏳ 加载数据中...</p>
+  <p v-if="error" class="err">❌ {{ error }}</p>
+</div>
+<script>
+const {createApp,ref,onMounted}=Vue
+createApp({setup(){
+  const ready=ref(false),summary=ref({}),error=ref('')
+  onMounted(async()=>{
+    try{
+      const r=await fetch('/api/summary')
+      const d=await r.json()
+      summary.value=d; ready.value=true
+    }catch(e){error.value=e.message}
+  })
+  return{ready,summary,error}
+}}).mount('#app')
+</script></body></html>
