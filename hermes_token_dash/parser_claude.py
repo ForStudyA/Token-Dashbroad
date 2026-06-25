@@ -100,26 +100,26 @@ def parse_jsonl(filepath: Path) -> list[TokenUsage]:
 
 
 def get_time_cutoff(time_filter: str) -> datetime:
-    \"\"\"Return a UTC ``datetime`` cutoff for the given *time_filter*.
+    """Return a UTC ``datetime`` cutoff for the given *time_filter*.
 
-    *time_filter* options: ``\"all\"`` | ``\"today\"`` | ``\"7d\"`` | ``\"30d\"``
-    Returns ``datetime.min`` with UTC tzinfo for ``\"all\"`` so that every
+    *time_filter* options: ``"all"`` | ``"today"`` | ``"7d"`` | ``"30d"``
+    Returns ``datetime.min`` with UTC tzinfo for ``"all"`` so that every
     record passes the filter.
-    \"\"\"
+    """
     now = datetime.now(timezone.utc)
     today = now.date()
 
-    if time_filter == \"today\":
+    if time_filter == "today":
         return datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
-    elif time_filter == \"7d\":
+    elif time_filter == "7d":
         return datetime.combine(
             today - timedelta(days=6), datetime.min.time(), tzinfo=timezone.utc
         )
-    elif time_filter == \"30d\":
+    elif time_filter == "30d":
         return datetime.combine(
             today - timedelta(days=29), datetime.min.time(), tzinfo=timezone.utc
         )
-    else:  # \"all\"
+    else:  # "all"
         return datetime.min.replace(tzinfo=timezone.utc)
 
 
@@ -131,23 +131,7 @@ def aggregate_by_model_date(
 
     *time_filter* options: ``"all"`` | ``"today"`` | ``"7d"`` | ``"30d"``
     """
-    now = datetime.now(timezone.utc)
-    today = now.date()
-
-    # Compute UTC cutoff
-    if time_filter == "today":
-        cutoff = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
-    elif time_filter == "7d":
-        cutoff = datetime.combine(
-            today - timedelta(days=6), datetime.min.time(), tzinfo=timezone.utc
-        )
-    elif time_filter == "30d":
-        cutoff = datetime.combine(
-            today - timedelta(days=29), datetime.min.time(), tzinfo=timezone.utc
-        )
-    else:  # "all"
-        cutoff = datetime.min.replace(tzinfo=timezone.utc)
-
+    cutoff = get_time_cutoff(time_filter)
     filtered = [r for r in usages if r.timestamp >= cutoff]
 
     # Aggregate by (model, date)

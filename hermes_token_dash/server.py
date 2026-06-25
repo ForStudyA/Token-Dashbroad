@@ -6,8 +6,7 @@ Serves token usage data via REST API and the Vue 3 frontend.
 from __future__ import annotations
 
 import webbrowser
-from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +24,7 @@ from hermes_token_dash.models import (
 from hermes_token_dash.parser_claude import (
     aggregate_by_model_date,
     get_available_models,
+    get_time_cutoff,
     parse_jsonl,
     scan_claude_jsonls,
 )
@@ -158,16 +158,7 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
-    now = datetime.now(timezone.utc)
-    today = now.date()
-
-    cutoff = datetime.min.replace(tzinfo=timezone.utc)
-    if time == "today":
-        cutoff = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
-    elif time == "7d":
-        cutoff = datetime.combine(today - timedelta(days=6), datetime.min.time(), tzinfo=timezone.utc)
-    elif time == "30d":
-        cutoff = datetime.combine(today - timedelta(days=29), datetime.min.time(), tzinfo=timezone.utc)
+    cutoff = get_time_cutoff(time)
 
     filtered = [r for r in records if r.timestamp >= cutoff]
     if model:
@@ -244,16 +235,7 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
-    now = datetime.now(timezone.utc)
-    today = now.date()
-
-    cutoff = datetime.min.replace(tzinfo=timezone.utc)
-    if time == "today":
-        cutoff = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
-    elif time == "7d":
-        cutoff = datetime.combine(today - timedelta(days=6), datetime.min.time(), tzinfo=timezone.utc)
-    elif time == "30d":
-        cutoff = datetime.combine(today - timedelta(days=29), datetime.min.time(), tzinfo=timezone.utc)
+    cutoff = get_time_cutoff(time)
 
     filtered = [r for r in records if r.timestamp >= cutoff]
     if model:
