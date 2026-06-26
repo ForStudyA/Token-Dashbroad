@@ -101,7 +101,7 @@ def parse_hermes_sessions() -> list[TokenUsage]:
                     TokenUsage(
                         request_id=f"hermes:{session_id[:16]}",
                         model=model,
-                        input_tokens=in_tok,
+                        input_tokens=in_tok + cache_read,
                         output_tokens=out_tok,
                         cache_read=cache_read,
                         cache_creation=cache_creation,
