@@ -83,7 +83,7 @@ def parse_hermes_sessions() -> list[TokenUsage]:
                 cache_read = row["cache_read_tokens"] or 0
                 cache_creation = row["cache_write_tokens"] or 0
 
-                agent = row["source"] or ""
+                agent = "hermes:" + (row["source"] or "unknown")
 
                 # Timestamp: prefer ended_at, fall back to started_at
                 ts_val = row["ended_at"] or row["started_at"]
