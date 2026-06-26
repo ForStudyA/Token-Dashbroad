@@ -15,8 +15,8 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from hermes_token_dash import models
 from hermes_token_dash.models import (
-    EXCHANGE_RATE,
     MODEL_PRICING,
     extract_provider,
     get_model_price,
@@ -239,7 +239,7 @@ def _compute_by_source_summary(records: list, time: str) -> list[dict]:
         d["cache_creation"] += r.cache_creation
         in_price, out_price = get_model_price(r.model)
         d["cost"] += (r.input_tokens / 1_000_000 * in_price
-                      + r.output_tokens / 1_000_000 * out_price) * EXCHANGE_RATE
+                      + r.output_tokens / 1_000_000 * out_price) * models.EXCHANGE_RATE
         # Per-model counts within source
         d["models"][r.model] = d["models"].get(r.model, 0) + 1
 
@@ -287,7 +287,7 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
     for r in page_records:
         in_price, out_price = get_model_price(r.model)
         cost = round(r.input_tokens / 1_000_000 * in_price
-                     + r.output_tokens / 1_000_000 * out_price, 6) * EXCHANGE_RATE
+                     + r.output_tokens / 1_000_000 * out_price, 6) * models.EXCHANGE_RATE
         items.append({
             "request_id": r.request_id,
             "model": r.model,
@@ -391,7 +391,7 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
         d["total_cost"] += (
             r.input_tokens / 1_000_000 * in_price
             + r.output_tokens / 1_000_000 * out_price
-        ) * EXCHANGE_RATE
+        ) * models.EXCHANGE_RATE
 
     result = []
     for p_name, d in prov.items():
@@ -484,7 +484,7 @@ def api_agent_stats(time: str = Query("all"), model: str = Query(""),
         cost = round(
             d["input"] / 1_000_000 * in_price
             + d["output"] / 1_000_000 * out_price, 4
-        ) * EXCHANGE_RATE
+        ) * models.EXCHANGE_RATE
         result.append({
             "agent": agent,
             "agent_source": agent_source,
@@ -546,8 +546,7 @@ def api_refresh():
 @app.get("/api/settings")
 def api_get_settings():
     """Return current settings: exchange rate."""
-    from hermes_token_dash.models import EXCHANGE_RATE
-    return {"exchange_rate": EXCHANGE_RATE}
+    return {"exchange_rate": models.EXCHANGE_RATE}
 
 
 class SettingsUpdate(BaseModel):
