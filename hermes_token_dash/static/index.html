@@ -116,10 +116,10 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 <div class="mitem" v-for="m in models" :class="{active:activeModel===m.name}" @click="activeModel=m.name;refreshView()"><span class="trunc">{{m.name}}</span><span class="cnt">{{m.count}}</span></div>
 
 <div class="scard"><div class="slabel">汇总</div>
-<div class="srow"><span class="l">输入</span><span class="v">{{fmt(summary.input)}}</span></div>
+<div class="srow"><span class="l">缓存命中</span><span class="v g">{{fmt(summary.cache_read)}}</span></div>
+<div class="srow"><span class="l">非命中</span><span class="v">{{fmt(summary.input - summary.cache_read)}}</span></div>
 <div class="srow"><span class="l">输出</span><span class="v">{{fmt(summary.output)}}</span></div>
 <hr class="sdiv">
-<div class="srow"><span class="l">缓存读取</span><span class="v g">{{fmt(summary.cache_read)}}</span></div>
 <div class="srow"><span class="l">缓存写入</span><span class="v">{{fmt(summary.cache_create)}}</span></div>
 <hr class="sdiv">
 <div class="srow"><span class="l">费用</span><span class="v g">¥{{summary.cost}}</span></div>
