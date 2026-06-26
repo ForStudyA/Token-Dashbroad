@@ -153,9 +153,9 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 </div>
 
 <div class="twrap" v-show="tab==='stats'">
-<div class="thdr"><span @click="toggleSort('model')" style="width:200px">模型</span><span @click="toggleSort('input')" style="width:100px">输入</span><span @click="toggleSort('output')" style="width:100px">输出</span><span @click="toggleSort('requests')" style="width:70px">请求</span><span style="width:140px">命中率</span><span @click="toggleSort('cost')" style="width:80px">费用</span><span @click="toggleSort('price')" style="width:90px">单价/1M</span></div>
+<div class="thdr"><span @click="toggleSort('model')" style="width:180px">模型</span><span @click="toggleSort('input')" style="width:80px">输入</span><span @click="toggleSort('output')" style="width:80px">输出</span><span @click="toggleSort('requests')" style="width:55px">请求</span><span style="width:120px">命中率</span><span @click="toggleSort('cost')" style="width:70px">费用</span><span @click="toggleSort('price')" style="width:80px">单价/1M</span><span style="width:180px;font-size:10px;color:var(--muted)">入价 / 缓存 / 出价</span></div>
 <template v-if="sorted.length">
-<div class="row" v-for="s in sorted" :key="s.model+s.date"><span class="trunc" style="width:200px">{{s.model}}</span><span style="width:100px">{{fmt(s.input)}}</span><span style="width:100px">{{fmt(s.output)}}</span><span style="width:70px">{{s.requests}}</span><span style="width:140px"><div class="pwrap"><div class="pbar"><div class="pfill" :class="hitColor(s.hit_rate)" :style="{width:s.hit_rate+'%'}"></div></div><span class="ppct" :class="hitColor(s.hit_rate)">{{s.hit_rate}}%</span></div></span><span style="width:80px">¥{{s.cost.toFixed(4)}}</span><span style="width:90px">{{pricePerM(s)}}</span></div>
+<div class="row" v-for="s in sorted" :key="s.model+s.date"><span class="trunc" style="width:180px">{{s.model}}</span><span style="width:80px">{{fmt(s.input)}}</span><span style="width:80px">{{fmt(s.output)}}</span><span style="width:55px">{{s.requests}}</span><span style="width:120px"><div class="pwrap"><div class="pbar"><div class="pfill" :class="hitColor(s.hit_rate)" :style="{width:s.hit_rate+'%'}"></div></div><span class="ppct" :class="hitColor(s.hit_rate)">{{s.hit_rate}}%</span></div></span><span style="width:70px">¥{{s.cost.toFixed(4)}}</span><span style="width:80px">{{pricePerM(s)}}</span><span style="width:180px;font-size:10px;color:var(--muted)">{{modelPrices(s.model).in}} / {{modelPrices(s.model).cr}} / {{modelPrices(s.model).out}}</span></div>
 </template><div class="empty" v-else>暂无数据</div>
 </div>
 
@@ -186,7 +186,7 @@ const tc=ref(null),cc=ref(null);let ti=null,ci=null,timer=null
 const tab=ref('stats'),sf=ref('date'),sd=ref(1)
 const logItems=ref([]),logTotal=ref(0),logPage=ref(1),logLimit=20,logLoading=ref(false)
 const pstats=ref([])
-const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref(''),showSettings=ref(false),exchangeRate=ref(7.0)
+const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref(''),showSettings=ref(false),exchangeRate=ref(7.0),pricing=ref({})
 
 const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天'}[timeFilter.value]))
 const merged=computed(()=>{const m={};for(const s of stats.value){const k=s.model;if(!m[k])m[k]={model:k,input:0,output:0,cache_read:0,cache_create:0,requests:0,requests_cache:0,cost:0};m[k].input+=s.input;m[k].output+=s.output;m[k].cache_read+=s.cache_read;m[k].cache_create+=s.cache_create;m[k].requests+=s.requests;m[k].requests_cache+=s.requests_cache;m[k].cost+=s.cost}for(const k in m){m[k].hit_rate=m[k].requests?Math.round(m[k].requests_cache/m[k].requests*1000)/10:0}return Object.values(m)})
@@ -195,6 +195,7 @@ const sorted=computed(()=>{let a=[...merged.value];a.sort((x,y)=>{let vx=x[sf.va
 function fmt(n){if(n==null)return'0';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return String(n)}
 function hitColor(v){if(v===0)return'';return v>=80?'g':v>=40?'y':'r'}
 function pricePerM(s){const total=s.input+s.output;if(!total)return'¥0';return'¥'+(s.cost*1e6/total).toFixed(2)}
+function modelPrices(m){const p=pricing.value[m];if(!p)return{in:'-',out:'-',cr:'-'};const r=p.currency==='USD'?exchangeRate.value:1;return{in:'¥'+(p.input_price*r).toFixed(2),out:'¥'+(p.output_price*r).toFixed(2),cr:p.cache_read_price>0?'¥'+(p.cache_read_price*r).toFixed(3):'-'}}
 function stime(iso,tz){if(!iso)return'';const d=new Date(iso);if(isNaN(d.getTime()))return'';const opts={timeZone:tz||'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'};return d.toLocaleString([],opts)}
 function toggleSort(f){if(sf.value===f)sd.value*=-1;else{sf.value=f;sd.value=1}}
 
@@ -204,6 +205,7 @@ async function fetchProfiles(){try{const r=await fetch('/api/profiles');const d=
 async function fetchSources(){try{const r=await fetch('/api/sources');const d=await r.json();sources.value=d.sources||[]}catch(e){}}
 async function fetchAgents(){try{const r=await fetch('/api/agents'+q({source:sourceFilter.value,profile:profileFilter.value}));const d=await r.json();agents.value=d.agents||[]}catch(e){}}
 async function fetchSettings(){try{const r=await fetch('/api/settings');const d=await r.json();exchangeRate.value=d.exchange_rate||7.25}catch(e){}}
+async function fetchPricing(){try{const r=await fetch('/api/pricing');const d=await r.json();const m={};d.forEach(p=>{m[p.model]=p});pricing.value=m}catch(e){}}
 async function saveSettings(){await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({exchange_rate:exchangeRate.value})});refreshAll()}
 
 async function fetchModels(){try{const r=await fetch('/api/models'+q({source:sourceFilter.value,profile:profileFilter.value}));const d=await r.json();models.value=d.models;modelsTotal.value=d.total}catch(e){}}
@@ -219,7 +221,7 @@ if(!data||!data.length)return
 const labels=data.map(d=>d.date)
 ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
 {label:'未命中',data:data.map(d=>Math.max(0,(d.input-d.cache_read)/1e6)),backgroundColor:'#4a8c3a',borderColor:'#4a8c3a',borderWidth:0,stack:'s',maxBarThickness:50},
-{label:'缓存命中',data:data.map(d=>d.cache_read/1e6),backgroundColor:'rgba(74,140,58,0.35)',borderColor:'rgba(74,140,58,0.35)',borderWidth:0,stack:'s',maxBarThickness:50},
+{label:'缓存命中',data:data.map(d=>d.cache_read/1e6),backgroundColor:'rgba(74,140,58,0.25)',borderColor:'rgba(74,140,58,0.25)',borderWidth:0,stack:'s',maxBarThickness:50},
 {label:'输出',data:data.map(d=>d.output/1e6),backgroundColor:'#5d9e4f',borderColor:'#5d9e4f',borderWidth:0,stack:'s',maxBarThickness:50}
 ]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{position:'top',labels:{color:'#5c6778',boxWidth:10,padding:8,font:{size:10}}},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.raw.toFixed(1)+'M'}},title:{display:true,text:'Token 消耗 (M)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{stacked:true,ticks:{color:'#5c6778',font:{size:9},callback:v=>v.toFixed(0)+'M'},beginAtZero:true}}}})
 ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
@@ -232,10 +234,10 @@ async function refreshView(){await Promise.all([fetchSources(),fetchAgents(),fet
 async function refreshAll(){await fetch('/api/refresh',{method:'POST'});await refreshView()}
 function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
 
-onMounted(async()=>{await fetchSettings();await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
+onMounted(async()=>{await fetchSettings();await fetchPricing();await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
 watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings}
 }}).mount('#app')
 </script></body></html>
