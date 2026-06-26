@@ -49,9 +49,9 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # DeepSeek (official domestic CNY)
     "deepseek-v4-pro": ModelPricing(3.00, 6.00, "CNY", cache_read_price=0.025),
     "deepseek-v4-flash": ModelPricing(1.00, 2.00, "CNY", cache_read_price=0.02),
-    # MiMo / Xiaomi (Aliyun domestic CNY)
-    "mimo-v2.5": ModelPricing(0.02, 1.00, "CNY"),
-    "mimo-v2.5-pro": ModelPricing(7.00, 21.00, "CNY"),
+    # MiMo / Xiaomi (priced same as DeepSeek equivalents)
+    "mimo-v2.5": ModelPricing(1.00, 2.00, "CNY"),
+    "mimo-v2.5-pro": ModelPricing(3.00, 6.00, "CNY"),
     # Qwen / Alibaba Cloud (domestic CNY)
     "qwen-max": ModelPricing(4.00, 10.00, "CNY"),
     "qwen-plus": ModelPricing(2.00, 8.00, "CNY"),
