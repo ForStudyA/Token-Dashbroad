@@ -221,7 +221,7 @@ if(!data||!data.length)return
 const labels=data.map(d=>d.date)
 ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
 {label:'未命中',data:data.map(d=>Math.max(0,(d.input-d.cache_read)/1e6)),backgroundColor:'#336b25',borderColor:'#336b25',borderWidth:0,stack:'s',maxBarThickness:50},
-{label:'缓存命中',data:data.map(d=>d.cache_read/1e6),backgroundColor:'rgba(74,140,58,0.22)',borderColor:'rgba(74,140,58,0.22)',borderWidth:0,stack:'s',maxBarThickness:50},
+{label:'缓存命中',data:data.map(d=>d.cache_read/1e6),backgroundColor:'rgba(74,140,58,0.28)',borderColor:'rgba(74,140,58,0.28)',borderWidth:0,stack:'s',maxBarThickness:50},
 {label:'输出',data:data.map(d=>d.output/1e6),backgroundColor:'#5d9e4f',borderColor:'#5d9e4f',borderWidth:0,stack:'s',maxBarThickness:50}
 ]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{position:'top',labels:{color:'#5c6778',boxWidth:10,padding:8,font:{size:10}}},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.raw.toFixed(1)+'M'}},title:{display:true,text:'Token 消耗 (M)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{stacked:true,ticks:{color:'#5c6778',font:{size:9},callback:v=>v.toFixed(0)+'M'},beginAtZero:true}}}})
 ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
