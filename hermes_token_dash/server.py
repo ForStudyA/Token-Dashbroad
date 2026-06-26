@@ -287,9 +287,9 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
     items = []
     for r in page_records:
         in_price, out_price, cr_price = get_model_price(r.model)
-        cost = round((max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
+        cost = round(max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
                      + r.cache_read / 1_000_000 * cr_price
-                     + r.output_tokens / 1_000_000 * out_price, 6))
+                     + r.output_tokens / 1_000_000 * out_price, 6)
         items.append({
             "request_id": r.request_id,
             "model": r.model,
