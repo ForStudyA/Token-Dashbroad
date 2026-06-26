@@ -175,7 +175,8 @@ const pstats=ref([])
 const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref('')
 
 const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天'}[timeFilter.value]))
-const sorted=computed(()=>{let a=[...stats.value];a.sort((x,y)=>{let vx=x[sf.value]??'',vy=y[sf.value]??'';if(typeof vx==='string'){vx=vx.toLowerCase();vy=vy.toLowerCase()}return vx>vy?sd.value:vx<vy?-sd.value:0});return a})
+const merged=computed(()=>{const m={};for(const s of stats.value){const k=s.model;if(!m[k])m[k]={model:k,input:0,output:0,cache_read:0,cache_create:0,requests:0,requests_cache:0,cost:0};m[k].input+=s.input;m[k].output+=s.output;m[k].cache_read+=s.cache_read;m[k].cache_create+=s.cache_create;m[k].requests+=s.requests;m[k].requests_cache+=s.requests_cache;m[k].cost+=s.cost}for(const k in m){m[k].hit_rate=m[k].requests?Math.round(m[k].requests_cache/m[k].requests*1000)/10:0}return Object.values(m)})
+const sorted=computed(()=>{let a=[...merged.value];a.sort((x,y)=>{let vx=x[sf.value]??'',vy=y[sf.value]??'';if(typeof vx==='string'){vx=vx.toLowerCase();vy=vy.toLowerCase()}return vx>vy?sd.value:vx<vy?-sd.value:0});return a})
 
 function fmt(n){if(n==null)return'0';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return String(n)}
 function hitColor(v){if(v===0)return'';return v>=80?'g':v>=40?'y':'r'}
