@@ -64,7 +64,7 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     "claude-sonnet-4-6": ModelPricing(3.00, 15.00, "USD"),
     "claude-opus-4-8": ModelPricing(5.00, 25.00, "USD"),
     # OpenAI / GPT (USD)
-    "gpt-5.5": ModelPricing(5.00, 30.00, "USD"),
+    "gpt-5.5": ModelPricing(5.00, 30.00, "USD", cache_read_price=0.50),
     "gpt-5.4-mini": ModelPricing(0.75, 4.50, "USD"),
     "gpt-5.3-codex": ModelPricing(1.25, 7.50, "USD"),
     "codex-auto-review": ModelPricing(0.00, 0.00, "USD"),
