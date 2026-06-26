@@ -168,7 +168,7 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 const{createApp,ref,computed,onMounted,onUnmounted,nextTick,watch}=Vue
 createApp({setup(){
 const stats=ref([]),summary=ref({}),models=ref([]),modelsTotal=ref(0)
-const timeFilter=ref('all'),sourceFilter=ref(''),activeModel=ref(''),refreshMs=ref(0),lastRefresh=ref('--:--:--'),timezoneFilter=ref('Asia/Shanghai')
+const timeFilter=ref('all'),sourceFilter=ref(''),activeModel=ref(''),refreshMs=ref(30000),lastRefresh=ref('--:--:--'),timezoneFilter=ref('Asia/Shanghai')
 const tc=ref(null),cc=ref(null);let ti=null,ci=null,timer=null
 const tab=ref('stats'),sf=ref('date'),sd=ref(1)
 const logItems=ref([]),logTotal=ref(0),logPage=ref(1),logLimit=20,logLoading=ref(false)
