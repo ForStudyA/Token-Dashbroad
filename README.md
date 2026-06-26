@@ -1,8 +1,14 @@
-# Hermes Token Dashboard
+# Hermes Token Dashboard / Hermes Token 仪表盘
 
-Multi-interface dashboard for AI coding tool token consumption analytics. Visualize per-model token usage, cache hit rates, request counts, and estimated costs across Claude Code and Hermes Agent sessions — with time-range filtering and auto-refresh.
+[English](#english) | [中文](#中文)
 
-## Interfaces (4 modes)
+---
+
+## English
+
+Multi-interface dashboard for AI coding tool token consumption analytics. Visualize per-model token usage, cache hit rates, request counts, and estimated costs across Claude Code, Codex CLI, and Hermes Agent sessions — with auto-detected filtering and auto-refresh.
+
+### Interfaces
 
 | Flag | Mode | Description |
 |------|------|-------------|
@@ -10,10 +16,12 @@ Multi-interface dashboard for AI coding tool token consumption analytics. Visual
 | `--web` | Web Server | FastAPI + Vue 3, opens browser at `http://127.0.0.1:8765` |
 | `--tui` | Terminal TUI | Textual framework with keyboard shortcuts |
 
-## Features
+### Features
 
-- **Multi-source data**: Claude Code JSONL sessions + Hermes Agent SQLite session DB
-- **4 models tracked**: DeepSeek V4 Pro, DeepSeek V4 Flash, MiMo V2.5, MiMo V2.5 Pro
+- **Multi-source data**: Claude Code JSONL + Codex CLI JSONL + Hermes Agent SQLite session DB
+- **Auto-detected filters**: data sources and agents are discovered from actual records, not hardcoded
+- **Agent filter**: distinguish between `cli`, `sdk-cli`, `claude-vscode` (Claude Code) and `Codex Desktop`, `codex_exec` (Codex)
+- **Profile filter**: filter by Hermes profile (default, named profiles)
 - **Real-time metrics**: input/output tokens, cache hit rate, estimated cost (¥)
 - **Time filters**: All Time, Today, Last 7 Days, Last 30 Days
 - **Trend charts**: daily aggregated token usage via Chart.js
@@ -22,421 +30,226 @@ Multi-interface dashboard for AI coding tool token consumption analytics. Visual
 - **Dynamic pricing**: runtime pricing overrides via REST API
 - **5-second auto-refresh** across all interfaces
 
-## Screenshot
+### Known Issues
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Hermes Token Dashboard                          🔄 5s  │
-├─────────────────────────────────────────────────────────┤
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────────┐ │
-│  │ 总请求   │ │ token输入 │ │ token输出 │ │ 估算费用   │ │
-│  │  2,644   │ │  498M    │ │  52.3M   │ │  ¥8,427.50 │ │
-│  └──────────┘ └──────────┘ └──────────┘ └────────────┘ │
-│                                                         │
-│  Model                   Requests     Input    Hit Rate│
-│  ───────────────────────────────────────────────────── │
-│  DeepSeek V4 Pro  █████  1,892      380M      78.2%   │
-│  DeepSeek V4 Flash ███     452       72M      62.1%   │
-│  MiMo V2.5         ██      218       35M      45.3%   │
-│  MiMo V2.5 Pro     █        82       11M      38.7%   │
-│                                                         │
-│  📈 Daily Token Usage (30d)                             │
-│  ┌─────────────────────────────────────────────────┐   │
-│  │  ██                                                  │
-│  │  ██  ██                                              │
-│  │  ██  ██  ██  ██                                      │
-│  │  ██  ██  ██  ██  ██  ██                              │
-│  │  ██  ██  ██  ██  ██  ██  ██  ██                      │
-│  └─────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-```
+| Issue | Details |
+|-------|---------|
+| **Hermes multi-turn sessions** | Hermes stores token usage at session level only (`sessions` table). `messages.token_count` is `NULL` in the current Hermes version. A multi-turn conversation appears as a single log entry with cumulative totals — cannot be split into per-turn records like Claude Code or Codex. |
+| **Chatbox not supported** | Chatbox stores data in Chrome's IndexedDB (LevelDB with `idb_cmp1` comparator, Snappy compression, CBOR encoding). Cannot be parsed while the app is running; needs app-level export support. |
+| **Timestamp precision** | Dashboard displays timestamps at second precision. Adjacent sessions may appear to share the same timestamp. |
 
-## Installation
+### Installation
 
-### Prerequisites
-
-- Python 3.11+
-- Windows 10+ (primary platform; macOS/Linux for Web mode)
-
-### Quick Start
+**Prerequisites**: Python 3.11+, Windows 10+ (primary platform; macOS/Linux for Web mode)
 
 ```bash
-git clone git@github.com:ForStudyA/Token-Dashbroad.git
-cd Token-Dashbroad
+git clone git@github.com:ForStudyA/Token-Dashboard.git
+cd Token-Dashboard
 
-# Create virtual environment
 python -m venv .venv
 .venv\Scripts\activate     # Windows
 # source .venv/bin/activate  # macOS/Linux
 
-# Install
 pip install -e .
 
-# Run web mode (no native deps needed)
+# Run web mode
 python main.py --web
 ```
 
-### Install with optional dependencies
-
+Optional dependencies:
 ```bash
-# Web only (minimal)
-pip install -e .
-
-# Desktop mode (requires Edge WebView2 — preinstalled on Windows 10+)
-pip install -e ".[desktop]"
-
-# TUI mode
-pip install -e ".[tui]"
-
-# Everything
-pip install -e ".[all]"
+pip install -e ".[desktop]"   # Desktop mode (needs Edge WebView2)
+pip install -e ".[tui]"       # TUI mode
+pip install -e ".[all]"       # Everything
 ```
 
-### Development install
+### Data Sources
 
-```bash
-git clone git@github.com:ForStudyA/Token-Dashbroad.git
-cd Token-Dashbroad
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[all]"
-pip install pytest
-```
+| Source | Location | Format | Granularity |
+|--------|----------|--------|-------------|
+| Claude Code | `~/.claude/projects/*/*.jsonl` | JSONL | Per API call |
+| Codex CLI | `~/.codex/sessions/*/rollout-*.jsonl` | JSONL | Per turn |
+| Hermes Agent | `~/AppData/Local/hermes/state.db` | SQLite | Per session |
 
-## Usage
+No configuration needed — paths are auto-detected.
 
-```bash
-# Desktop app (default)
-python main.py
-
-# Web server — opens browser at http://127.0.0.1:8765
-python main.py --web
-
-# Terminal TUI
-python main.py --tui
-```
-
-### Web mode is the primary interface
-
-Start the server and open `http://127.0.0.1:8765` in any browser. All data, charts, and controls are client-side rendered — no page reloads.
-
-## Data Sources
-
-The dashboard reads from two sources automatically:
-
-| Source | Location | Format |
-|--------|----------|--------|
-| Claude Code | `~/.claude/projects/*/<session>.jsonl` | JSONL — one JSON object per line |
-| Hermes Agent | `~/AppData/Local/hermes/state.db` + `profiles/*/state.db` | SQLite — session message store |
-
-No configuration needed — paths are resolved from your home directory.
-
-## REST API
+### REST API
 
 Base URL: `http://127.0.0.1:8765`
 
-All endpoints accept optional query parameters for filtering. Time values: `all` (default), `today`, `7d`, `30d`.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/summary` | Aggregated totals |
+| GET | `/api/models` | Available models with counts |
+| GET | `/api/stats` | Per-model per-date statistics |
+| GET | `/api/trends` | Daily aggregated chart data |
+| GET | `/api/logs` | Paginated raw request logs |
+| GET | `/api/providers` | Per-provider aggregated stats |
+| GET | `/api/sources` | Auto-detected data sources |
+| GET | `/api/agents` | Available agents with counts |
+| GET | `/api/profiles` | Available Hermes profiles |
+| GET | `/api/pricing` | Current pricing config |
+| PUT | `/api/pricing` | Update pricing at runtime |
+| POST | `/api/refresh` | Force reload data |
 
-### GET `/api/summary`
+Common parameters: `time` (all/today/7d/30d), `model`, `source`, `profile`, `agent`
 
-Aggregated totals across all records.
-
-```bash
-curl http://127.0.0.1:8765/api/summary
-```
-
-Response:
-```json
-{
-  "input": 498000000,
-  "output": 52300000,
-  "cost": 8427.50,
-  "requests": 2644,
-  "hit_rate": 72.3,
-  "groups": 156
-}
-```
-
-Parameters: `time`, `model`, `source`
-
-### GET `/api/models`
-
-List available models with request counts.
-
-```bash
-curl http://127.0.0.1:8765/api/models
-```
-
-Response:
-```json
-{
-  "models": [
-    {"name": "deepseek-v4-pro", "count": 1892},
-    {"name": "deepseek-v4-flash", "count": 452}
-  ],
-  "total": 2644
-}
-```
-
-Parameters: `source`
-
-### GET `/api/stats`
-
-Per-model per-date statistics.
-
-```bash
-curl "http://127.0.0.1:8765/api/stats?time=7d&model=deepseek-v4-pro"
-```
-
-Response:
-```json
-[
-  {
-    "model": "deepseek-v4-pro",
-    "date": "2026-06-25",
-    "input": 8500000,
-    "output": 920000,
-    "cache_read": 3200000,
-    "cache_create": 450000,
-    "requests": 87,
-    "requests_cache": 68,
-    "hit_rate": 78.2,
-    "cost": 4.85
-  }
-]
-```
-
-Parameters: `time`, `model`, `source`
-
-### GET `/api/trends`
-
-Daily aggregated data for charts.
-
-```bash
-curl "http://127.0.0.1:8765/api/trends?time=30d"
-```
-
-Response:
-```json
-[
-  {
-    "date": "2026-06-01",
-    "requests": 45,
-    "input": 5200000,
-    "output": 480000,
-    "cache_read": 1800000,
-    "cache_creation": 220000,
-    "cost": 3.12
-  }
-]
-```
-
-Parameters: `time` (default `30d`), `source`, `model`
-
-### GET `/api/logs`
-
-Paginated raw request logs.
-
-```bash
-curl "http://127.0.0.1:8765/api/logs?page=1&limit=10&time=7d"
-```
-
-Response:
-```json
-{
-  "items": [
-    {
-      "request_id": "req_abc123",
-      "model": "deepseek-v4-pro",
-      "input_tokens": 28456,
-      "output_tokens": 1234,
-      "cache_read": 8000,
-      "cache_creation": 1500,
-      "timestamp": "2026-06-25T14:22:00+00:00",
-      "cost": 0.0158,
-      "data_source": "claude_code",
-      "status_code": 200,
-      "latency_ms": 2340.5,
-      "first_token_ms": 450.2
-    }
-  ],
-  "total": 2644,
-  "page": 1,
-  "limit": 10
-}
-```
-
-Parameters: `time`, `model`, `source`, `page` (default 1), `limit` (default 50, max 500)
-
-### GET `/api/providers`
-
-Per-provider aggregated stats with success rate and latency.
-
-```bash
-curl "http://127.0.0.1:8765/api/providers?time=30d"
-```
-
-Response:
-```json
-[
-  {
-    "provider": "deepseek",
-    "request_count": 1892,
-    "total_input_tokens": 380000000,
-    "total_output_tokens": 42000000,
-    "total_cache_read": 150000000,
-    "total_cache_creation": 22000000,
-    "total_cost": 6200.50,
-    "success_rate": 99.2,
-    "avg_latency_ms": 2340.5,
-    "models": ["deepseek-v4-flash", "deepseek-v4-pro"]
-  }
-]
-```
-
-Parameters: `time`, `model`, `source`
-
-### GET `/api/pricing`
-
-Current model pricing configuration.
-
-```bash
-curl http://127.0.0.1:8765/api/pricing
-```
-
-### PUT `/api/pricing`
-
-Update pricing at runtime (in-memory only).
-
-```bash
-curl -X PUT http://127.0.0.1:8765/api/pricing \
-  -H "Content-Type: application/json" \
-  -d '[{"model": "my-model", "input_price": 1.0, "output_price": 5.0}]'
-```
-
-### POST `/api/refresh`
-
-Force reload data from disk.
-
-```bash
-curl -X POST http://127.0.0.1:8765/api/refresh
-```
-
-## Example: Python Client
-
-```python
-import requests
-
-BASE = "http://127.0.0.1:8765"
-
-# Get summary stats
-summary = requests.get(f"{BASE}/api/summary", params={"time": "7d"}).json()
-print(f"Requests: {summary['requests']}, Cost: ¥{summary['cost']}")
-
-# List models
-models = requests.get(f"{BASE}/api/models").json()
-for m in models["models"]:
-    print(f"  {m['name']}: {m['count']} requests")
-
-# Get daily trends for charting
-trends = requests.get(f"{BASE}/api/trends", params={"time": "30d"}).json()
-dates = [t["date"] for t in trends]
-costs = [t["cost"] for t in trends]
-
-# Paginated logs
-page1 = requests.get(f"{BASE}/api/logs", params={"page": 1, "limit": 20}).json()
-for item in page1["items"]:
-    print(f"[{item['timestamp'][:10]}] {item['model']}: "
-          f"{item['input_tokens']}→{item['output_tokens']} tokens, "
-          f"¥{item['cost']:.4f}")
-
-# Refresh data
-requests.post(f"{BASE}/api/refresh")
-```
-
-## Example: JavaScript (Browser)
-
-```javascript
-// Fetch summary
-const summary = await fetch('/api/summary?time=7d').then(r => r.json());
-console.log(`Total cost: ¥${summary.cost}`);
-
-// Fetch trends for Chart.js
-const trends = await fetch('/api/trends?time=30d').then(r => r.json());
-new Chart(ctx, {
-  type: 'bar',
-  data: {
-    labels: trends.map(t => t.date),
-    datasets: [{
-      label: 'Input Tokens',
-      data: trends.map(t => t.input),
-    }]
-  }
-});
-
-// Fetch logs with pagination
-const logs = await fetch('/api/logs?page=1&limit=50').then(r => r.json());
-logs.items.forEach(item => {
-  console.log(`${item.model}: ${item.input_tokens} tokens, ¥${item.cost}`);
-});
-```
-
-## Project Structure
+### Project Structure
 
 ```
 hermes-token-dash/
-├── main.py                          # Entry point with mode dispatch
-├── pyproject.toml                   # Project metadata and dependencies
+├── main.py
+├── pyproject.toml
 ├── hermes_token_dash/
-│   ├── __init__.py
-│   ├── server.py                    # FastAPI REST API (7 endpoints)
-│   ├── desktop.py                   # pywebview desktop wrapper
+│   ├── server.py                    # FastAPI REST API
+│   ├── desktop.py                   # pywebview desktop
 │   ├── app.py                       # Textual TUI
-│   ├── gui.py                       # tkinter native GUI
 │   ├── models.py                    # TokenUsage, ModelStats, pricing
 │   ├── parser_claude.py             # Claude Code JSONL parser
+│   ├── parser_codex.py              # Codex CLI JSONL parser
 │   ├── parser_hermes.py             # Hermes Agent SQLite parser
-│   ├── config.py                    # Paths, defaults, display names
-│   ├── widgets.py                   # Custom Textual widgets
+│   ├── config.py                    # Paths and defaults
 │   └── static/
 │       └── index.html               # Vue 3 + Chart.js frontend
+└── tests/
 ```
 
-## Tech Stack
+### Tech Stack
 
 | Layer | Technology |
 |-------|-----------|
 | Backend | Python 3.11+, FastAPI, uvicorn |
 | Web Frontend | Vue 3 CDN, Chart.js, no build step |
 | Desktop | pywebview (Edge WebView2) |
-| TUI | Textual 8.x |
-| Data | JSONL (Claude), SQLite (Hermes) |
+| TUI | Textual |
+| Data | JSONL (Claude/Codex), SQLite (Hermes) |
 
-## Model Pricing
+### License
 
-Default pricing per 1M tokens (USD):
+MIT
 
-| Model | Input | Output |
-|-------|-------|--------|
-| DeepSeek V4 Pro | $0.55 | $0.19 |
-| DeepSeek V4 Flash | $0.09 | $0.36 |
-| MiMo V2.5 | $0.50 | $2.00 |
-| MiMo V2.5 Pro | $0.50 | $2.00 |
-| Claude Sonnet 4 | $3.00 | $15.00 |
-| Claude Opus 4 | $15.00 | $75.00 |
+---
 
-Override pricing at runtime via `PUT /api/pricing`.
+## 中文
 
-## Configuration
+AI 编程工具 token 消耗分析仪表盘，多界面支持。可按时段、模型、数据源、Agent、Profile 筛选，展示 Claude Code、Codex CLI 和 Hermes Agent 的 token 用量、缓存命中率、请求次数和预估费用。
 
-All paths and defaults are in `hermes_token_dash/config.py`. No config files needed — everything is auto-detected from your home directory.
+### 启动方式
 
-Key constants:
-- `HERMES_MAIN_DB`: `~/AppData/Local/hermes/state.db`
-- `CLAUDE_PROJECTS_DIR`: `~/.claude/projects/`
-- `DEFAULT_PORT`: 8765
-- `AUTO_REFRESH_INTERVAL`: 5 seconds
+| 参数 | 模式 | 说明 |
+|------|------|------|
+| _(默认)_ | 桌面应用 | 原生窗口（pywebview + Edge WebView2） |
+| `--web` | Web 服务 | FastAPI + Vue 3，浏览器打开 `http://127.0.0.1:8765` |
+| `--tui` | 终端 TUI | Textual 框架，键盘快捷键操作 |
 
-## License
+### 功能
+
+- **多数据源**：Claude Code JSONL + Codex CLI JSONL + Hermes Agent SQLite
+- **自动发现筛选**：数据源和 Agent 列表从实际数据中自动提取，无需手动维护
+- **Agent 筛选**：区分 Claude Code 的 `cli`/`sdk-cli`/`claude-vscode` 和 Codex 的 `Codex Desktop`/`codex_exec`
+- **Profile 筛选**：按 Hermes 的 profile 过滤（default、命名 profile）
+- **实时指标**：输入/输出 token、缓存命中率、预估费用（¥）
+- **时间筛选**：全部、今天、最近 7 天、最近 30 天
+- **趋势图表**：Chart.js 日聚合 token 消耗图
+- **分页日志**：完整请求历史，包含模型、token、延迟、费用
+- **Provider 统计**：按服务商聚合，含成功率和延迟
+- **动态定价**：通过 REST API 运行时覆盖定价
+- **5 秒自动刷新**
+
+### 已知问题
+
+| 问题 | 详情 |
+|------|------|
+| **Hermes 多轮对话** | Hermes 只记录会话级别的 token 总量（`sessions` 表）。当前版本中 `messages.token_count` 为 `NULL`。一次多轮对话在日志中显示为一条记录，无法像 Claude Code 或 Codex 那样按每一轮拆分。 |
+| **Chatbox 不支持** | Chatbox 数据存储在 Chrome IndexedDB 中（LevelDB，使用 `idb_cmp1` 比较器、Snappy 压缩、CBOR 编码）。应用运行时无法解析，需要应用层面导出数据。 |
+| **时间戳精度** | 仪表盘显示时间精确到秒。相邻会话可能显示相同时间。 |
+
+### 安装
+
+**环境要求**：Python 3.11+，Windows 10+（主要平台；macOS/Linux 支持 Web 模式）
+
+```bash
+git clone git@github.com:ForStudyA/Token-Dashboard.git
+cd Token-Dashboard
+
+python -m venv .venv
+.venv\Scripts\activate     # Windows
+# source .venv/bin/activate  # macOS/Linux
+
+pip install -e .
+
+# 启动 Web 模式
+python main.py --web
+```
+
+可选依赖：
+```bash
+pip install -e ".[desktop]"   # 桌面模式（需要 Edge WebView2）
+pip install -e ".[tui]"       # TUI 模式
+pip install -e ".[all]"       # 全部
+```
+
+### 数据来源
+
+| 来源 | 位置 | 格式 | 粒度 |
+|------|------|------|------|
+| Claude Code | `~/.claude/projects/*/*.jsonl` | JSONL | 每次 API 调用 |
+| Codex CLI | `~/.codex/sessions/*/rollout-*.jsonl` | JSONL | 每轮对话 |
+| Hermes Agent | `~/AppData/Local/hermes/state.db` | SQLite | 每个会话 |
+
+无需配置，路径自动检测。
+
+### REST API
+
+根路径：`http://127.0.0.1:8765`
+
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET | `/api/summary` | 聚合总计 |
+| GET | `/api/models` | 可用模型及请求数 |
+| GET | `/api/stats` | 按模型和日期统计 |
+| GET | `/api/trends` | 日聚合图表数据 |
+| GET | `/api/logs` | 分页请求日志 |
+| GET | `/api/providers` | 按服务商聚合统计 |
+| GET | `/api/sources` | 自动发现的数据源列表 |
+| GET | `/api/agents` | 可用 Agent 及请求数 |
+| GET | `/api/profiles` | 可用 Hermes profile 列表 |
+| GET | `/api/pricing` | 当前定价配置 |
+| PUT | `/api/pricing` | 运行时更新定价 |
+| POST | `/api/refresh` | 强制重新加载数据 |
+
+通用参数：`time`（all/today/7d/30d）、`model`、`source`、`profile`、`agent`
+
+### 项目结构
+
+```
+hermes-token-dash/
+├── main.py
+├── pyproject.toml
+├── hermes_token_dash/
+│   ├── server.py                    # FastAPI REST API
+│   ├── desktop.py                   # pywebview 桌面版
+│   ├── app.py                       # Textual TUI
+│   ├── models.py                    # 数据模型和定价
+│   ├── parser_claude.py             # Claude Code JSONL 解析
+│   ├── parser_codex.py              # Codex CLI JSONL 解析
+│   ├── parser_hermes.py             # Hermes Agent SQLite 解析
+│   ├── config.py                    # 路径和默认值
+│   └── static/
+│       └── index.html               # Vue 3 + Chart.js 前端
+└── tests/
+```
+
+### 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| 后端 | Python 3.11+, FastAPI, uvicorn |
+| Web 前端 | Vue 3 CDN, Chart.js，无构建步骤 |
+| 桌面 | pywebview (Edge WebView2) |
+| TUI | Textual |
+| 数据 | JSONL（Claude/Codex），SQLite（Hermes） |
+
+### 许可证
 
 MIT
