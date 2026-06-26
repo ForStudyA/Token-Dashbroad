@@ -37,31 +37,35 @@ class ModelPricing:
             return (self.input_price, self.output_price)
         return (self.input_price * EXCHANGE_RATE, self.output_price * EXCHANGE_RATE)
 
-
 # Pricing per 1M tokens in native billing currency
-# CNY models: domestic API pricing, no exchange rate applied
-# USD models: overseas/international pricing, converted via EXCHANGE_RATE
+# Sources: official API pricing pages (June 2026)
+#   DeepSeek: api-docs.deepseek.com
+#   Qwen: help.aliyun.com/zh/model-studio/model-pricing
+#   GLM: open.bigmodel.cn/pricing
+#   OpenAI: platform.openai.com/docs/pricing
+#   Anthropic: anthropic.com/pricing
+#   MiMo: help.aliyun.com (Aliyun-hosted pricing)
 MODEL_PRICING: dict[str, ModelPricing] = {
-    # DeepSeek (domestic CNY pricing)
-    "deepseek-v4-pro": ModelPricing(2.00, 4.00, "CNY"),
-    "deepseek-v4-flash": ModelPricing(0.50, 2.00, "CNY"),
-    # MiMo / Xiaomi (domestic CNY pricing, official page)
+    # DeepSeek (official domestic CNY)
+    "deepseek-v4-pro": ModelPricing(3.00, 6.00, "CNY", cache_read_price=0.025),
+    "deepseek-v4-flash": ModelPricing(1.00, 2.00, "CNY", cache_read_price=0.02),
+    # MiMo / Xiaomi (Aliyun domestic CNY)
     "mimo-v2.5": ModelPricing(0.02, 1.00, "CNY"),
-    "mimo-v2.5-pro": ModelPricing(2.00, 4.00, "CNY"),
-    # Qwen / Alibaba Cloud (domestic CNY pricing)
-    "qwen-max": ModelPricing(10.00, 40.00, "CNY"),
+    "mimo-v2.5-pro": ModelPricing(7.00, 21.00, "CNY"),
+    # Qwen / Alibaba Cloud (domestic CNY)
+    "qwen-max": ModelPricing(4.00, 10.00, "CNY"),
     "qwen-plus": ModelPricing(2.00, 8.00, "CNY"),
-    "qwen-turbo": ModelPricing(0.50, 2.00, "CNY"),
+    "qwen-turbo": ModelPricing(0.30, 0.60, "CNY"),
     "qwen3-235b-a22b": ModelPricing(2.00, 8.00, "CNY"),
-    # GLM / Zhipu (domestic CNY pricing)
-    "glm-5.2": ModelPricing(1.00, 4.00, "CNY"),
+    # GLM / Zhipu (domestic CNY)
+    "glm-5.2": ModelPricing(8.00, 28.00, "CNY", cache_read_price=2.00),
     # Claude / Anthropic (USD)
     "claude-sonnet-4-6": ModelPricing(3.00, 15.00, "USD"),
-    "claude-opus-4-8": ModelPricing(15.00, 75.00, "USD"),
+    "claude-opus-4-8": ModelPricing(5.00, 25.00, "USD"),
     # OpenAI / GPT (USD)
     "gpt-5.5": ModelPricing(5.00, 30.00, "USD"),
     "gpt-5.4-mini": ModelPricing(0.75, 4.50, "USD"),
-    "gpt-5.3-codex": ModelPricing(2.00, 8.00, "USD"),
+    "gpt-5.3-codex": ModelPricing(1.25, 7.50, "USD"),
     "codex-auto-review": ModelPricing(0.00, 0.00, "USD"),
 }
 
