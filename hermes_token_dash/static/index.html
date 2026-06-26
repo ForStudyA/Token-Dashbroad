@@ -23,8 +23,8 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 .toolbar select:focus{border-color:var(--accent)}
 .btn{background:var(--accent);color:var(--bg);border:none;border-radius:6px;padding:6px 16px;font-size:13px;font-weight:600;cursor:pointer}
 .btn:hover{opacity:.85}
-.btn-muted{background:var(--border);color:var(--muted);border:none;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer}
-.btn-muted:hover{color:var(--text)}
+.btn-muted{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer}
+.btn-muted:hover{color:var(--white);background:var(--border)}
 
 /* body */
 .body{display:flex;flex:1;overflow:hidden}
@@ -186,7 +186,7 @@ const tc=ref(null),cc=ref(null);let ti=null,ci=null,timer=null
 const tab=ref('stats'),sf=ref('date'),sd=ref(1)
 const logItems=ref([]),logTotal=ref(0),logPage=ref(1),logLimit=20,logLoading=ref(false)
 const pstats=ref([])
-const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref(''),showSettings=ref(false),exchangeRate=ref(7.25)
+const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref(''),showSettings=ref(false),exchangeRate=ref(7.0)
 
 const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天'}[timeFilter.value]))
 const merged=computed(()=>{const m={};for(const s of stats.value){const k=s.model;if(!m[k])m[k]={model:k,input:0,output:0,cache_read:0,cache_create:0,requests:0,requests_cache:0,cost:0};m[k].input+=s.input;m[k].output+=s.output;m[k].cache_read+=s.cache_read;m[k].cache_create+=s.cache_create;m[k].requests+=s.requests;m[k].requests_cache+=s.requests_cache;m[k].cost+=s.cost}for(const k in m){m[k].hit_rate=m[k].requests?Math.round(m[k].requests_cache/m[k].requests*1000)/10:0}return Object.values(m)})
@@ -218,9 +218,9 @@ if(ci){ci.destroy();ci=null}
 if(!data||!data.length)return
 const labels=data.map(d=>d.date)
 ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
-{label:'未命中',data:data.map(d=>Math.max(0,(d.input-d.cache_read)/1e6)),backgroundColor:'#5ea847',borderColor:'#5ea847',borderWidth:0,stack:'s',maxBarThickness:50},
-{label:'缓存命中',data:data.map(d=>d.cache_read/1e6),backgroundColor:'rgba(94,168,71,0.35)',borderColor:'rgba(94,168,71,0.35)',borderWidth:0,stack:'s',maxBarThickness:50},
-{label:'输出',data:data.map(d=>d.output/1e6),backgroundColor:'#7d9e5e',borderColor:'#7d9e5e',borderWidth:0,stack:'s',maxBarThickness:50}
+{label:'未命中',data:data.map(d=>Math.max(0,(d.input-d.cache_read)/1e6)),backgroundColor:'#4a8c3a',borderColor:'#4a8c3a',borderWidth:0,stack:'s',maxBarThickness:50},
+{label:'缓存命中',data:data.map(d=>d.cache_read/1e6),backgroundColor:'rgba(74,140,58,0.35)',borderColor:'rgba(74,140,58,0.35)',borderWidth:0,stack:'s',maxBarThickness:50},
+{label:'输出',data:data.map(d=>d.output/1e6),backgroundColor:'#5d9e4f',borderColor:'#5d9e4f',borderWidth:0,stack:'s',maxBarThickness:50}
 ]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{position:'top',labels:{color:'#5c6778',boxWidth:10,padding:8,font:{size:10}}},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.raw.toFixed(1)+'M'}},title:{display:true,text:'Token 消耗 (M)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{stacked:true,ticks:{color:'#5c6778',font:{size:9},callback:v=>v.toFixed(0)+'M'},beginAtZero:true}}}})
 ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
 {label:'费用',data:data.map(d=>parseFloat(d.cost)||0),backgroundColor:'#e6b450',borderColor:'#e6b450',borderWidth:0,maxBarThickness:50}

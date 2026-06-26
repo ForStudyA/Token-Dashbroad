@@ -31,11 +31,12 @@ class ModelPricing:
             "cache_write_price": self.cache_write_price,
         }
 
-    def display_prices(self) -> tuple[float, float]:
-        """Return (input, output) prices in display currency (CNY)."""
+    def display_prices(self) -> tuple[float, float, float]:
+        """Return (input, output, cache_read) prices in display currency (CNY)."""
         if self.currency == "CNY":
-            return (self.input_price, self.output_price)
-        return (self.input_price * EXCHANGE_RATE, self.output_price * EXCHANGE_RATE)
+            return (self.input_price, self.output_price, self.cache_read_price)
+        return (self.input_price * EXCHANGE_RATE, self.output_price * EXCHANGE_RATE,
+                self.cache_read_price * EXCHANGE_RATE)
 
 # Pricing per 1M tokens in native billing currency
 # Sources: official API pricing pages (June 2026)
@@ -70,14 +71,14 @@ MODEL_PRICING: dict[str, ModelPricing] = {
 }
 
 # Exchange rate: USD -> CNY (only applied to USD-priced models)
-EXCHANGE_RATE: float = 7.25
+EXCHANGE_RATE: float = 7.0
 
 DEFAULT_INPUT_PRICE = 0.50
 DEFAULT_OUTPUT_PRICE = 2.00
 
 
-def get_model_price(model: str) -> tuple[float, float]:
-    """Return (input_price, output_price) in CNY for *model*.
+def get_model_price(model: str) -> tuple[float, float, float]:
+    """Return (input_price, output_price, cache_read_price) in CNY.
 
     Uses fuzzy substring matching.  USD models are converted via
     ``EXCHANGE_RATE``; CNY models are returned as-is.
@@ -86,7 +87,7 @@ def get_model_price(model: str) -> tuple[float, float]:
     for key, pricing in MODEL_PRICING.items():
         if key in model_lower or model_lower in key:
             return pricing.display_prices()
-    return (DEFAULT_INPUT_PRICE, DEFAULT_OUTPUT_PRICE)
+    return (DEFAULT_INPUT_PRICE, DEFAULT_OUTPUT_PRICE, 0.0)
 
 
 def get_full_model_pricing(model: str) -> ModelPricing | None:
@@ -158,15 +159,19 @@ class ModelStats:
 
         Cache hit rate is defined as the percentage of total requests that
         had a cache read (cache_read_input_tokens > 0).
-        Cost is in display currency (CNY).  USD models are converted
-        via EXCHANGE_RATE via get_model_price; CNY models use native pricing.
+        Cost formula: (input - cache_read) * input_price
+                    + cache_read * cache_read_price
+                    + output * output_price
+        (prices are per 1M tokens, already in CNY via get_model_price)
         """
         if self.request_count > 0:
             self.cache_hit_rate = (
                 self.requests_with_cache / self.request_count * 100
             )
-        in_price, out_price = get_model_price(self.model)
+        in_price, out_price, cr_price = get_model_price(self.model)
+        non_cache_input = max(0, self.total_input - self.total_cache_read)
         self.estimated_cost = (
-            self.total_input / 1_000_000 * in_price
+            non_cache_input / 1_000_000 * in_price
+            + self.total_cache_read / 1_000_000 * cr_price
             + self.total_output / 1_000_000 * out_price
         )

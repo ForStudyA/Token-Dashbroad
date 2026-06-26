@@ -237,9 +237,10 @@ def _compute_by_source_summary(records: list, time: str) -> list[dict]:
         d["output"] += r.output_tokens
         d["cache_read"] += r.cache_read
         d["cache_creation"] += r.cache_creation
-        in_price, out_price = get_model_price(r.model)
-        d["cost"] += (r.input_tokens / 1_000_000 * in_price
-                      + r.output_tokens / 1_000_000 * out_price)
+        in_price, out_price, cr_price = get_model_price(r.model)
+        d["cost"] += ((max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
+                      + r.cache_read / 1_000_000 * cr_price
+                      + r.output_tokens / 1_000_000 * out_price))
         # Per-model counts within source
         d["models"][r.model] = d["models"].get(r.model, 0) + 1
 
@@ -285,9 +286,10 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
 
     items = []
     for r in page_records:
-        in_price, out_price = get_model_price(r.model)
-        cost = round(r.input_tokens / 1_000_000 * in_price
-                     + r.output_tokens / 1_000_000 * out_price, 6)
+        in_price, out_price, cr_price = get_model_price(r.model)
+        cost = round((max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
+                     + r.cache_read / 1_000_000 * cr_price
+                     + r.output_tokens / 1_000_000 * out_price, 6))
         items.append({
             "request_id": r.request_id,
             "model": r.model,
@@ -387,9 +389,10 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
         if r.latency_ms > 0:
             d["latencies"].append(r.latency_ms)
 
-        in_price, out_price = get_model_price(r.model)
+        in_price, out_price, cr_price = get_model_price(r.model)
         d["total_cost"] += (
-            r.input_tokens / 1_000_000 * in_price
+            max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
+            + r.cache_read / 1_000_000 * cr_price
             + r.output_tokens / 1_000_000 * out_price
         )
 
@@ -480,9 +483,10 @@ def api_agent_stats(time: str = Query("all"), model: str = Query(""),
     result = []
     for (agent, agent_source, model_name), d in groups.items():
         hit_rate = round(d["requests_cache"] / d["requests"] * 100, 1) if d["requests"] > 0 else 0
-        in_price, out_price = get_model_price(model_name)
+        in_price, out_price, cr_price = get_model_price(model_name)
         cost = round(
-            d["input"] / 1_000_000 * in_price
+            max(0, d["input"] - d["cache_read"]) / 1_000_000 * in_price
+            + d["cache_read"] / 1_000_000 * cr_price
             + d["output"] / 1_000_000 * out_price, 4
         )
         result.append({
