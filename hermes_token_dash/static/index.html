@@ -106,7 +106,7 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 <select v-model="agentFilter" @change="refreshView"><option value="">全部Agent</option><option v-for="a in agents" :value="a.name">{{a.name}}</option></select>
 <select v-model="activeModel" @change="refreshView"><option value="">全部模型</option><option v-for="m in models" :value="m.name">{{m.name}}</option></select>
 <select v-model="refreshMs"><option value="0">手动</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
-<button class="btn-muted" @click="showSettings=!showSettings">&#x26ED;</button>
+<button class="btn-muted" @click="showSettings=!showSettings">&#x26ED; 设置</button>
 <button class="btn-muted" @click="refreshAll">&#8635; 刷新</button>
 <span style="margin-left:auto;font-size:11px;color:var(--muted)">{{lastRefresh}}</span>
 </div>
