@@ -398,6 +398,8 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
 
     result = []
     for p_name, d in prov.items():
+        if d["total_cost"] <= 0:
+            continue
         success_rate = round(
             d["success_count"] / d["request_count"] * 100, 1
         ) if d["request_count"] > 0 else 100.0
