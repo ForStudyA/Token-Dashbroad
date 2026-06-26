@@ -225,7 +225,7 @@ ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
 {label:'输出',data:data.map(d=>d.output/1e6),backgroundColor:'#5d9e4f',borderColor:'#5d9e4f',borderWidth:0,stack:'s',maxBarThickness:50}
 ]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{position:'top',labels:{color:'#5c6778',boxWidth:10,padding:8,font:{size:10}}},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.raw.toFixed(1)+'M'}},title:{display:true,text:'Token 消耗 (M)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{stacked:true,ticks:{color:'#5c6778',font:{size:9},callback:v=>v.toFixed(0)+'M'},beginAtZero:true}}}})
 ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
-{label:'费用',data:data.map(d=>parseFloat(d.cost)||0),backgroundColor:'#c9983a',borderColor:'#c9983a',borderWidth:0,maxBarThickness:50}
+{label:'费用',data:data.map(d=>parseFloat(d.cost)||0),backgroundColor:'#ad822e',borderColor:'#ad822e',borderWidth:0,maxBarThickness:50}
 ]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{display:false},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>'¥'+ctx.raw.toFixed(4)}},title:{display:true,text:'价格 (¥)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{ticks:{color:'#5c6778',font:{size:9},callback:v=>'¥'+v},beginAtZero:true}}}})
 }
 
