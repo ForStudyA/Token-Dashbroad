@@ -140,6 +140,7 @@ class ModelStats:
 
         Cache hit rate is defined as the percentage of total requests that
         had a cache read (cache_read_input_tokens > 0).
+        Cost is in display currency (CNY by default, via EXCHANGE_RATE).
         """
         if self.request_count > 0:
             self.cache_hit_rate = (
@@ -149,4 +150,4 @@ class ModelStats:
         self.estimated_cost = (
             self.total_input / 1_000_000 * in_price
             + self.total_output / 1_000_000 * out_price
-        )
+        ) * EXCHANGE_RATE
