@@ -111,20 +111,21 @@ def get_time_cutoff(time_filter: str, tz_offset: int = 8) -> datetime:
     record passes the filter.
     """
     # 获取当前时间在用户时区的日期
-    from datetime import timezone as tz
+    from datetime import timezone as tz, timedelta
     utc_now = datetime.now(tz.utc)
     local_now = utc_now + timedelta(hours=tz_offset)
     today = local_now.date()
+    user_tz = tz(timedelta(hours=tz_offset))
 
     if time_filter == "today":
         # 今天开始时间（用户时区）转为UTC
-        local_start = datetime.combine(today, datetime.min.time(), tzinfo=tz(tz_offset))
+        local_start = datetime.combine(today, datetime.min.time(), tzinfo=user_tz)
         return local_start.astimezone(tz.utc)
     elif time_filter == "7d":
-        local_start = datetime.combine(today - timedelta(days=6), datetime.min.time(), tzinfo=tz(tz_offset))
+        local_start = datetime.combine(today - timedelta(days=6), datetime.min.time(), tzinfo=user_tz)
         return local_start.astimezone(tz.utc)
     elif time_filter == "30d":
-        local_start = datetime.combine(today - timedelta(days=29), datetime.min.time(), tzinfo=tz(tz_offset))
+        local_start = datetime.combine(today - timedelta(days=29), datetime.min.time(), tzinfo=user_tz)
         return local_start.astimezone(tz.utc)
     else:  # "all"
         return datetime.min.replace(tzinfo=tz.utc)

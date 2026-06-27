@@ -388,7 +388,7 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
 
 @app.get("/api/trends")
 def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str = Query(""), model: str = Query(""), agent: str = Query(""),
-               start: str = Query(""), end: str = Query("")):
+               start: str = Query(""), end: str = Query(""), tz: int = Query(8)):
     """Return daily aggregated data for charts: [{date, requests, input, output, cache_read, cost}]."""
     records = _get_records()
     if source:
@@ -400,9 +400,9 @@ def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str =
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
     if time == "custom":
-        records = _apply_time_filter(records, "custom", start, end)
+        records = _apply_time_filter(records, "custom", start, end, tz)
         time = "all"
-    stats = aggregate_by_model_date(records, time)
+    stats = aggregate_by_model_date(records, time, tz)
 
     daily: dict[str, dict] = {}
     for s in stats:
