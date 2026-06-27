@@ -70,7 +70,7 @@ def parse_hermes_sessions() -> list[TokenUsage]:
             cur.execute(
                 """SELECT id, model, input_tokens, output_tokens,
                           cache_read_tokens, cache_write_tokens,
-                          started_at, ended_at, source
+                          started_at, ended_at, source, api_call_count
                    FROM sessions
                    WHERE input_tokens > 0 OR output_tokens > 0
                 """
@@ -82,6 +82,7 @@ def parse_hermes_sessions() -> list[TokenUsage]:
                 out_tok = row["output_tokens"] or 0
                 cache_read = row["cache_read_tokens"] or 0
                 cache_creation = row["cache_write_tokens"] or 0
+                api_calls = row["api_call_count"] or 1
 
                 agent = "hermes:" + (row["source"] or "unknown")
 
@@ -109,6 +110,7 @@ def parse_hermes_sessions() -> list[TokenUsage]:
                         data_source="hermes",
                         profile=profile,
                         agent=agent,
+                        api_call_count=api_calls,
                     )
                 )
             conn.close()

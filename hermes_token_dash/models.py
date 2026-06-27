@@ -138,6 +138,7 @@ class TokenUsage:
     first_token_ms: float = 0.0
     profile: str = ""
     agent: str = ""
+    api_call_count: int = 1  # API调用次数（Hermes从sessions表读取）
 
 
 @dataclass

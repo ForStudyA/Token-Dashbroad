@@ -156,7 +156,7 @@ def aggregate_by_model_date(
         d["total_output"] += rec.output_tokens
         d["total_cache_read"] += rec.cache_read
         d["total_cache_creation"] += rec.cache_creation
-        d["request_count"] += 1
+        d["request_count"] += rec.api_call_count  # 使用实际API调用次数
         if rec.cache_read > 0:
             d["requests_with_cache"] += 1
 
