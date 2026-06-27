@@ -172,8 +172,9 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <div class="mitem" v-for="m in models" :class="{active:activeModel===m.name}" @click="activeModel=m.name;refreshView()"><span class="trunc">{{m.name}}</span><span class="cnt">{{m.count}}</span></div>
 
 <div class="scard"><div class="slabel">汇总</div>
-<div class="srow"><span class="l">输出</span><span class="v g">{{fmt(summary.output)}}</span></div>
+<div class="srow"><span class="l">总token消耗</span><span class="v g">{{fmt(summary.input+summary.output)}}</span></div>
 <div class="srow"><span class="l">输入</span><span class="v g">{{fmt(summary.input)}}</span></div>
+<div class="srow"><span class="l">输出</span><span class="v g">{{fmt(summary.output)}}</span></div>
 <div class="srow"><span class="l">缓存命中</span><span class="v dim">{{fmt(summary.cache_read)}}</span></div>
 <div class="srow"><span class="l">非命中</span><span class="v dim">{{fmt(Math.max(0, summary.input - summary.cache_read))}}</span></div>
 <hr class="sdiv">
