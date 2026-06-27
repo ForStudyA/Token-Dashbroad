@@ -86,17 +86,16 @@ def parse_hermes_sessions() -> list[TokenUsage]:
 
                 agent = "hermes:" + (row["source"] or "unknown")
 
-                # Timestamp: prefer ended_at, fall back to started_at
-                ts_val = row["ended_at"] or row["started_at"]
-                try:
-                    ts = datetime.fromtimestamp(ts_val, tz=timezone.utc)
-                except (TypeError, ValueError, OSError):
-                    # For active sessions with future/invalid timestamps, use started_at
-                    ts_val = row["started_at"]
+                # Timestamp: prefer ended_at, fall back to current time for active sessions
+                ts_val = row["ended_at"]
+                if ts_val:
                     try:
                         ts = datetime.fromtimestamp(ts_val, tz=timezone.utc)
                     except (TypeError, ValueError, OSError):
                         ts = datetime.now(timezone.utc)
+                else:
+                    # 活跃会话使用当前时间
+                    ts = datetime.now(timezone.utc)
 
                 records.append(
                     TokenUsage(
