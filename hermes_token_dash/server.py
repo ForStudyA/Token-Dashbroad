@@ -453,7 +453,7 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
                 "models": set(),
             }
         d = prov[p]
-        d["request_count"] += 1
+        d["request_count"] += r.api_call_count  # 使用实际API调用次数
         d["total_input_tokens"] += r.input_tokens
         d["total_output_tokens"] += r.output_tokens
         d["total_cache_read"] += r.cache_read
