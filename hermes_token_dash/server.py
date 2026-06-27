@@ -31,22 +31,35 @@ from hermes_token_dash.parser_claude import (
 from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
 from hermes_token_dash.parser_hermes import parse_hermes_sessions
 
-def _get_user_input_counts() -> dict[str, int]:
+def _get_user_input_counts(tz_offset: int = 8, time_filter: str = "all", start: str = "", end: str = "") -> dict[str, int]:
     """Get user input count per model from Hermes messages table."""
     import sqlite3
     import os
+    from datetime import datetime, timedelta, timezone as tz
+    
     counts = {}
     db_path = os.path.expanduser("~/AppData/Local/hermes/state.db")
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         cur = conn.cursor()
-        cur.execute("""
+        
+        # 构建时间筛选条件
+        time_condition = ""
+        params = []
+        if time_filter != "all":
+            from hermes_token_dash.parser_claude import get_time_cutoff
+            cutoff = get_time_cutoff(time_filter, tz_offset)
+            cutoff_ts = cutoff.timestamp()
+            time_condition = "AND s.started_at >= ?"
+            params.append(cutoff_ts)
+        
+        cur.execute(f"""
             SELECT s.model, COUNT(*) as cnt
             FROM messages m
             JOIN sessions s ON m.session_id = s.id
-            WHERE m.role = 'user' AND s.model IS NOT NULL
+            WHERE m.role = 'user' AND s.model IS NOT NULL {time_condition}
             GROUP BY s.model
-        """)
+        """, params)
         for row in cur.fetchall():
             counts[row[0]] = row[1]
         conn.close()
@@ -228,7 +241,7 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
         stats = [s for s in stats if s.model == model]
 
     # 获取每个模型的用户输入次数
-    user_input_counts = _get_user_input_counts()
+    user_input_counts = _get_user_input_counts(tz, time, start, end)
 
     result = []
     for s in stats:
@@ -277,7 +290,7 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
     token_hit = round(tcr / ti * 100, 1) if ti > 0 else 0
 
     # 获取用户输入次数
-    user_input_counts = _get_user_input_counts()
+    user_input_counts = _get_user_input_counts(tz, time, start, end)
     total_user_inputs = sum(user_input_counts.get(s.model, 0) for s in stats)
 
     return {
