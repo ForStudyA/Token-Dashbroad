@@ -276,6 +276,10 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
     hit = round(trc / tr * 100, 1) if tr > 0 else 0
     token_hit = round(tcr / ti * 100, 1) if ti > 0 else 0
 
+    # 获取用户输入次数
+    user_input_counts = _get_user_input_counts()
+    total_user_inputs = sum(user_input_counts.get(s.model, 0) for s in stats)
+
     return {
         "input": ti,
         "output": to,
@@ -286,6 +290,7 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
         "hit_rate": hit,
         "token_hit_rate": token_hit,
         "groups": len(stats),
+        "user_inputs": total_user_inputs,
         "by_source": _compute_by_source_summary(records, time) if not source else [],
     }
 
