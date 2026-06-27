@@ -460,7 +460,7 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
         d["total_cache_creation"] += r.cache_creation
         d["models"].add(r.model)
         if r.status_code == 200:
-            d["success_count"] += 1
+            d["success_count"] += r.api_call_count  # 与request_count一致
         if r.latency_ms > 0:
             d["latencies"].append(r.latency_ms)
 
