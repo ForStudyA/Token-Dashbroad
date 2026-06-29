@@ -69,10 +69,11 @@ def parse_hermes_sessions() -> list[TokenUsage]:
             cur = conn.cursor()
             cur.execute(
                 """SELECT id, model, input_tokens, output_tokens,
-                          cache_read_tokens, cache_write_tokens,
-                          started_at, ended_at, source, api_call_count
-                   FROM sessions
-                   WHERE input_tokens > 0 OR output_tokens > 0
+                         cache_read_tokens, cache_write_tokens,
+                         reasoning_tokens,
+                         started_at, ended_at, source, api_call_count
+                  FROM sessions
+                  WHERE input_tokens > 0 OR output_tokens > 0
                 """
             )
             for row in cur.fetchall():
@@ -83,11 +84,11 @@ def parse_hermes_sessions() -> list[TokenUsage]:
                 cache_read = row["cache_read_tokens"] or 0
                 cache_creation = row["cache_write_tokens"] or 0
                 api_calls = row["api_call_count"] or 1
-
+                reasoning = row["reasoning_tokens"] or 0
                 agent = "hermes:" + (row["source"] or "unknown")
 
-                # Timestamp: prefer ended_at, fall back to current time for active sessions
-                ts_val = row["ended_at"]
+                # Timestamp: prefer ended_at, fall back to started_at for active sessions.
+                ts_val = row["ended_at"] or row["started_at"]
                 if ts_val:
                     try:
                         ts = datetime.fromtimestamp(ts_val, tz=timezone.utc)
@@ -105,6 +106,7 @@ def parse_hermes_sessions() -> list[TokenUsage]:
                         output_tokens=out_tok,
                         cache_read=cache_read,
                         cache_creation=cache_creation,
+                        reasoning_tokens=reasoning,
                         timestamp=ts,
                         data_source="hermes",
                         profile=profile,

@@ -143,6 +143,10 @@ def aggregate_by_model_date(
     cutoff = get_time_cutoff(time_filter, tz_offset)
     filtered = [r for r in usages if r.timestamp >= cutoff]
 
+    # 用户时区，用于按日期分组
+    from datetime import timezone as _tz, timedelta as _td
+    user_tz = _tz(_td(hours=tz_offset))
+
     # Aggregate by (model, date)
     agg: defaultdict[tuple[str, str], dict] = defaultdict(
         lambda: {
@@ -150,21 +154,25 @@ def aggregate_by_model_date(
             "total_output": 0,
             "total_cache_read": 0,
             "total_cache_creation": 0,
+            "total_reasoning": 0,
             "request_count": 0,
             "requests_with_cache": 0,
         }
     )
 
     for rec in filtered:
-        key = (rec.model, rec.timestamp.date().isoformat())
+        # 用用户时区的日期分组，而不是UTC日期
+        local_dt = rec.timestamp.astimezone(user_tz)
+        key = (rec.model, local_dt.date().isoformat())
         d = agg[key]
         d["total_input"] += rec.input_tokens
         d["total_output"] += rec.output_tokens
         d["total_cache_read"] += rec.cache_read
         d["total_cache_creation"] += rec.cache_creation
+        d["total_reasoning"] += getattr(rec, "reasoning_tokens", 0)
         d["request_count"] += rec.api_call_count  # 使用实际API调用次数
         if rec.cache_read > 0:
-            d["requests_with_cache"] += 1
+            d["requests_with_cache"] += rec.api_call_count  # 与request_count一致
 
     result = []
     for (model_name, date_str), d in agg.items():
@@ -175,6 +183,7 @@ def aggregate_by_model_date(
             total_output=d["total_output"],
             total_cache_read=d["total_cache_read"],
             total_cache_creation=d["total_cache_creation"],
+            total_reasoning=d["total_reasoning"],
             request_count=d["request_count"],
             requests_with_cache=d["requests_with_cache"],
         )

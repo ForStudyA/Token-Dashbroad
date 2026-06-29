@@ -278,11 +278,11 @@ class TestMultiSourceAndPricing:
     def test_pricing_fuzzy_match(self):
         """Scenario 3c — get_model_price fuzzy-matches model name variants."""
         # Exact match
-        assert get_model_price("deepseek-v4-pro") == (0.55, 0.19)
+        assert get_model_price("deepseek-v4-pro") == (3.0, 6.0, 0.025)
         # Substring variant
-        assert get_model_price("claude-sonnet-4-6-20250526") == (3.00, 15.00)
+        assert get_model_price("claude-sonnet-4-6-20250526") == (21.0, 105.0, 0.0)
         # Unknown model → defaults
-        assert get_model_price("nonexistent-model") == (0.50, 2.00)
+        assert get_model_price("nonexistent-model") == (0.50, 2.00, 0.0)
 
     def test_pricing_put_then_get(self, test_client):
         """Scenario 3d — PUT /api/pricing changes pricing, then GET /api/pricing

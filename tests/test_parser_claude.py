@@ -118,7 +118,7 @@ class TestParseJsonl:
         r = result[0]
         assert r.request_id == "req-001"
         assert r.model == "deepseek-v4-pro"
-        assert r.input_tokens == 2000
+        assert r.input_tokens == 2100  # input_tokens(2000) + cache_read(100)
         assert r.output_tokens == 800
         assert r.cache_read == 100
         assert r.cache_creation == 50
@@ -193,7 +193,7 @@ class TestParseJsonl:
             result = parse_jsonl(Path("/fake/session.jsonl"))
         assert len(result) == 1, "Should deduplicate to 1 record"
         r = result[0]
-        assert r.input_tokens == 200  # max of [100, 200]
+        assert r.input_tokens == 220  # max of [100, 200] + cache_read(20)
         assert r.output_tokens == 100  # max of [50, 100]
         assert r.cache_read == 20  # max of [10, 20]
         assert r.cache_creation == 10  # max of [5, 10]

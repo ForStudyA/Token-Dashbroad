@@ -130,7 +130,7 @@ def _mock_parse_hermes_sessions() -> list[TokenUsage]:
 
 
 def _mock_aggregate_by_model_date(
-    records: list[TokenUsage], time_filter: str = "all"
+    records: list[TokenUsage], time_filter: str = "all", tz_offset: int = 8
 ) -> list[ModelStats]:
     """模拟 aggregate_by_model_date：返回 SAMPLE_STATS 的子集。"""
     return [s for s in SAMPLE_STATS if _time_matches(s, time_filter)]

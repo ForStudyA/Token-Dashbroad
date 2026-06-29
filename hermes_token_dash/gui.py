@@ -28,6 +28,7 @@ from hermes_token_dash.parser_claude import (
     parse_jsonl,
     scan_claude_jsonls,
 )
+from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
 from hermes_token_dash.parser_hermes import parse_hermes_sessions
 
 TIME_FILTERS = ["all", "today", "7d", "30d"]
@@ -278,10 +279,15 @@ class TokenDashApp:
         for f in files:
             records.extend(parse_jsonl(f))
         records.extend(parse_hermes_sessions())
+        codex_files = scan_codex_jsonls()
+        for f in codex_files:
+            records.extend(parse_codex_jsonl(f))
         self._all_usages = records
         self._models = get_available_models(records)
         now = datetime.now().strftime("%H:%M:%S")
-        self._refresh_label.configure(text=f"Updated {now}  ·  {len(files)} Claude + Hermes")
+        self._refresh_label.configure(
+            text=f"Updated {now}  |  {len(files)} Claude + Hermes + {len(codex_files)} Codex"
+        )
         self._status_text.configure(text="Ready")
 
     def _load_and_render(self) -> None:

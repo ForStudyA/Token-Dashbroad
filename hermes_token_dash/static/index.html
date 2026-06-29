@@ -153,8 +153,11 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <select v-model="activeModel" @change="refreshView"><option value="">全部模型</option><option v-for="m in models" :value="m.name">{{m.name}}</option></select>
 <select v-model="refreshMs"><option value="0">手动</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
 <button class="btn-muted" @click="showSettings=!showSettings">&#x26ED; 设置</button>
-<button class="btn-muted" @click="refreshAll">&#8635; 刷新</button>
-<span style="margin-left:auto;font-size:12px;color:var(--muted)">上次刷新 {{lastRefresh}}</span>
+<button class="btn-muted" @click="refreshAll" :disabled="isRefreshing" :style="isRefreshing?'opacity:0.5;cursor:wait':''">{{isRefreshing?'&#8987; 刷新中...':'&#8635; 刷新'}}</button>
+<div style="margin-left:auto;text-align:right;line-height:1.4">
+<div style="font-size:12px;color:var(--muted)">上次刷新 {{lastRefresh}}</div>
+<div style="font-size:11px;color:var(--muted)">当前时间 {{currentTime}} <span style="opacity:0.6">(UTC{{timezoneFilter>=0?'+':''}}{{timezoneFilter}})</span></div>
+</div>
 </div>
 
 <div class="settings-panel" v-show="showSettings" style="background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;gap:16px;align-items:center;flex-shrink:0">
@@ -277,8 +280,11 @@ const{createApp,ref,computed,onMounted,onUnmounted,nextTick,watch}=Vue
 createApp({setup(){
 const stats=ref([]),summary=ref({}),models=ref([]),modelsTotal=ref(0)
 const timeFilter=ref('30d'),sourceFilter=ref(''),activeModel=ref(''),refreshMs=ref(30000),lastRefresh=ref('--:--:--'),timezoneFilter=ref(8),customStart=ref(''),customEnd=ref('')
+const currentTime=ref('--:--:--')
+const isRefreshing=ref(false)
 const fpStart=ref(null),fpEnd=ref(null)
 const tc=ref(null),cc=ref(null);let ti=null,ci=null,timer=null
+let clockTimer=null
 const tab=ref('stats'),sf=ref('date'),sd=ref(1)
 const logItems=ref([]),logTotal=ref(0),logPage=ref(1),logLimit=20,logLoading=ref(false)
 const pstats=ref([])
@@ -299,14 +305,18 @@ function tzIana(n){n=Number(n);if(isNaN(n)||n<-12||n>14)n=8;const s=n<=0?'+':'-'
 function stime(iso,tz){if(!iso)return'';const d=new Date(iso);if(isNaN(d.getTime()))return'';const opts={timeZone:tzIana(tz??8),month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'};return d.toLocaleString([],opts)}
 function toggleSort(f){if(sf.value===f)sd.value*=-1;else{sf.value=f;sd.value=1}}
 
-const q=(p={})=>{let s=new URLSearchParams();Object.entries(p).forEach(([k,v])=>{if(v)s.set(k,v)});return'?'+s.toString()}
-function timeParams(){const p={time:timeFilter.value,tz:timezoneFilter.value};if(timeFilter.value==='custom'){if(fpStart.value&&fpStart.value.selectedDates[0])p.start=fpStart.value.selectedDates[0].toISOString();if(fpEnd.value&&fpEnd.value.selectedDates[0])p.end=fpEnd.value.selectedDates[0].toISOString()}return p}
+const q=(p={})=>{let s=new URLSearchParams();Object.entries(p).forEach(([k,v])=>{if(v!=null&&v!=='')s.set(k,v)});return'?'+s.toString()}
+function formatDateLocal(date){const p=n=>String(n).padStart(2,'0');return date.getFullYear()+'-'+p(date.getMonth()+1)+'-'+p(date.getDate())+'T'+p(date.getHours())+':'+p(date.getMinutes())}
+function wallToUtcMs(value,tzOffset){const m=String(value||'').match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);if(!m)return NaN;return Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5])-Number(tzOffset||0)*3600000}
+function dateInTimezone(utcMs,tzOffset){const d=new Date(utcMs+Number(tzOffset||0)*3600000);return new Date(d.getUTCFullYear(),d.getUTCMonth(),d.getUTCDate(),d.getUTCHours(),d.getUTCMinutes())}
+function syncPickersToTimezone(oldTz,newTz){[fpStart.value,fpEnd.value].forEach(fp=>{if(!fp||!fp.selectedDates[0])return;const wall=formatDateLocal(fp.selectedDates[0]);const utcMs=wallToUtcMs(wall,oldTz);if(!isNaN(utcMs))fp.setDate([dateInTimezone(utcMs,newTz)],false)})}
+function timeParams(){const p={time:timeFilter.value,tz:timezoneFilter.value};if(timeFilter.value==='custom'){if(fpStart.value&&fpStart.value.selectedDates[0])p.start=formatDateLocal(fpStart.value.selectedDates[0]);if(fpEnd.value&&fpEnd.value.selectedDates[0])p.end=formatDateLocal(fpEnd.value.selectedDates[0])}return p}
 function toDtLocal(d){const p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes())}
-let prevTime='30d'
+let prevTime='30d',prevTimezone=timezoneFilter.value
 function onTimeFilterChange(){
 const v=timeFilter.value;
 if(v==='custom'){
-const now=new Date();
+const now=dateInTimezone(Date.now(),timezoneFilter.value);
 let sd=new Date(now);
 if(prevTime==='today'){sd.setHours(0,0,0,0)}
 else if(prevTime==='7d'){sd.setDate(sd.getDate()-6);sd.setHours(0,0,0,0)}
@@ -398,25 +408,27 @@ if(ci){ci.destroy();ci=null}
 if(!data||!data.length)return
 const labels=data.map(d=>d.date)
 ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
-{label:'未命中',data:data.map(d=>Math.max(0,(d.input-d.cache_read)/1e6)),backgroundColor:'#5cb85c',borderColor:'#5cb85c',borderWidth:0,stack:'s',maxBarThickness:50},
-{label:'缓存命中',data:data.map(d=>d.cache_read/1e6),backgroundColor:'rgba(92,184,92,0.28)',borderColor:'rgba(92,184,92,0.28)',borderWidth:0,stack:'s',maxBarThickness:50},
-{label:'输出',data:data.map(d=>d.output/1e6),backgroundColor:'#8bc34a',borderColor:'#8bc34a',borderWidth:0,stack:'s',maxBarThickness:50}
-]},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index'},plugins:{legend:{position:'top',labels:{color:'#5c6778',boxWidth:10,padding:8,font:{size:10}}},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.raw.toFixed(1)+'M',labelColor:ctx=>{const c=ctx.dataset.backgroundColor;if(typeof c==='string'&&c.startsWith('rgba(92,184,92'))return{backgroundColor:'#5cb85c',borderColor:'#5cb85c'};return{backgroundColor:c,borderColor:ctx.dataset.borderColor}}}},title:{display:true,text:'Token 消耗 (M)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{stacked:true,ticks:{color:'#5c6778',font:{size:9},callback:v=>v.toFixed(0)+'M'},beginAtZero:true}}}})
+{label:'输出',data:data.map(d=>d.output/1e6),backgroundColor:'#2e7d32',borderColor:'#2e7d32',borderWidth:0,stack:'s',maxBarThickness:50},
+{label:'命中',data:data.map(d=>d.cache_read/1e6),backgroundColor:'#4caf50',borderColor:'#4caf50',borderWidth:0,stack:'s',maxBarThickness:50},
+{label:'未命中',data:data.map(d=>Math.max(0,(d.input-d.cache_read)/1e6)),backgroundColor:'#81c784',borderColor:'#81c784',borderWidth:0,stack:'s',maxBarThickness:50}
+]},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index'},plugins:{legend:{position:'top',labels:{color:'#5c6778',boxWidth:10,padding:8,font:{size:10}}},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',itemSort:(a,b)=>b.datasetIndex-a.datasetIndex,callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.raw.toFixed(1)+'M'}},title:{display:true,text:'Token 消耗 (M)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{stacked:true,ticks:{color:'#5c6778',font:{size:9},callback:v=>v.toFixed(0)+'M'},beginAtZero:true}}}})
 ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
 {label:'费用',data:data.map(d=>parseFloat(d.cost)||0),backgroundColor:'#e6b450',borderColor:'#e6b450',borderWidth:0,maxBarThickness:50}
 ]},options:{responsive:true,maintainAspectRatio:false,animation:false,interaction:{mode:'index'},plugins:{legend:{display:false},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9',callbacks:{label:ctx=>'¥'+ctx.raw.toFixed(4)}},title:{display:true,text:'价格 (¥)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{ticks:{color:'#5c6778',font:{size:9},callback:v=>'¥'+v},beginAtZero:true}}}})
 }
 
 async function refreshCharts(){const d=await fetchTrends();await nextTick();buildCharts(d)}
-async function refreshView(){await Promise.all([fetchSources(),fetchAgents(),fetchProfiles(),fetchModels(),fetchStats(),fetchLogs(),fetchBalance(),fetchDsBalance()]);if(tab.value==='providers')await fetchProviders();await refreshCharts();lastRefresh.value=new Date().toLocaleTimeString('zh-CN',{timeZone:tzIana(timezoneFilter.value),hour:'2-digit',minute:'2-digit',second:'2-digit'})}
-async function refreshAll(){await fetch('/api/refresh',{method:'POST'});await refreshView()}
+async function refreshView(){isRefreshing.value=true;try{await Promise.all([fetchSources(),fetchAgents(),fetchProfiles(),fetchModels(),fetchStats(),fetchLogs(),refreshCharts()]);if(tab.value==='providers')await fetchProviders();lastRefresh.value=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}finally{isRefreshing.value=false}}
+async function refreshAll(){isRefreshing.value=true;try{await fetch('/api/refresh',{method:'POST'});await refreshView()}finally{isRefreshing.value=false}fetchBalance();fetchDsBalance()}
 function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
 
-onMounted(async()=>{await fetchSettings();await fetchPricing();await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
-watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
+onMounted(async()=>{await fetchSettings();await fetchPricing();await refreshAll();fetchBalance();fetchDsBalance();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
+onMounted(()=>{function updateClock(){currentTime.value=new Date().toLocaleTimeString('zh-CN',{timeZone:tzIana(timezoneFilter.value),hour:'2-digit',minute:'2-digit',second:'2-digit'})}updateClock();clockTimer=setInterval(updateClock,1000)})
 watch(timeFilter,(val)=>{if(val==='custom')nextTick(initFlatpickr)})
-onUnmounted(()=>{if(timer)clearInterval(timer);if(fpStart.value)fpStart.value.destroy();if(fpEnd.value)fpEnd.value.destroy()})
+watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
+watch(timezoneFilter,()=>{const nextTz=Number(timezoneFilter.value);currentTime.value=new Date().toLocaleTimeString('zh-CN',{timeZone:tzIana(nextTz),hour:'2-digit',minute:'2-digit',second:'2-digit'});if(timeFilter.value==='custom'){syncPickersToTimezone(prevTimezone,nextTz);refreshView()}prevTimezone=nextTz})
+onUnmounted(()=>{if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);if(fpStart.value)fpStart.value.destroy();if(fpEnd.value)fpEnd.value.destroy()})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,customStart,customEnd,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings,balance,reLoginMimo,dsBalance,showDsKeyInput,dsKeyInput,saveDsKey,onTimeFilterChange}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,customStart,customEnd,lastRefresh,currentTime,isRefreshing,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings,balance,reLoginMimo,dsBalance,showDsKeyInput,dsKeyInput,saveDsKey,onTimeFilterChange}
 }}).mount('#app')
 </script></body></html>

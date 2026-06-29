@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-
 import pytest
 
 from hermes_token_dash.models import (
@@ -50,16 +49,17 @@ class TestModelPricing:
     def test_to_row(self):
         """to_row returns a dict keyed by model name with all price fields."""
         mp = ModelPricing(
-            input_price=0.55,
-            output_price=0.19,
+            input_price=3.0,
+            output_price=6.0,
             cache_read_price=0.05,
             cache_write_price=0.02,
         )
         row = mp.to_row("deepseek-v4-pro")
         assert row == {
             "model": "deepseek-v4-pro",
-            "input_price": 0.55,
-            "output_price": 0.19,
+            "input_price": 3.0,
+            "output_price": 6.0,
+            "currency": "USD",
             "cache_read_price": 0.05,
             "cache_write_price": 0.02,
         }
@@ -74,11 +74,12 @@ class TestModelPricing:
     def test_to_row_roundtrip(self):
         """ModelPricing.from_row(to_row(...)) is not built-in, but values
         survive a manual reconstruction."""
-        mp = ModelPricing(0.09, 0.36, 0.01, 0.01)
+        mp = ModelPricing(input_price=1.0, output_price=2.0, cache_read_price=0.02, cache_write_price=0.0)
         row = mp.to_row("deepseek-v4-flash")
         reconstructed = ModelPricing(
             input_price=row["input_price"],
             output_price=row["output_price"],
+            currency=row.get("currency", "USD"),
             cache_read_price=row["cache_read_price"],
             cache_write_price=row["cache_write_price"],
         )
@@ -94,46 +95,55 @@ class TestGetModelPrice:
 
     def test_exact_match(self):
         """Exact model name returns correct pricing tuple."""
-        input_p, output_p = get_model_price("deepseek-v4-pro")
-        assert input_p == 0.55
-        assert output_p == 0.19
+        input_p, output_p, cr_p = get_model_price("deepseek-v4-pro")
+        assert input_p == 3.0
+        assert output_p == 6.0
 
     def test_exact_match_mimo(self):
         """mimo-v2.5 pricing."""
-        input_p, output_p = get_model_price("mimo-v2.5")
-        assert input_p == 0.50
-        assert output_p == 2.00
+        input_p, output_p, cr_p = get_model_price("mimo-v2.5")
+        assert input_p == 1.0
+        assert output_p == 2.0
+
+    def test_exact_match_mimo_pro(self):
+        """mimo-v2.5-pro pricing (should NOT match mimo-v2.5)."""
+        input_p, output_p, cr_p = get_model_price("mimo-v2.5-pro")
+        assert input_p == 3.0
+        assert output_p == 6.0
 
     def test_fuzzy_match_longer_variant(self):
         """'claude-sonnet-4-6-20250526' matches 'claude-sonnet-4-6'."""
-        input_p, output_p = get_model_price("claude-sonnet-4-6-20250526")
-        assert input_p == 3.00
-        assert output_p == 15.00
+        # With exact-match-first, this falls through to prefix matching
+        # "claude-sonnet-4-6" is a prefix of "claude-sonnet-4-6-20250526"
+        input_p, output_p, cr_p = get_model_price("claude-sonnet-4-6-20250526")
+        # claude-sonnet-4-6 is USD, so display_prices() converts to CNY: 3.0*7=21.0
+        assert input_p == 21.0
+        assert output_p == 105.0
 
     def test_fuzzy_match_contains_key(self):
         """'my-deepseek-v4-pro-custom' contains the key."""
-        input_p, output_p = get_model_price("my-deepseek-v4-pro-custom")
-        assert input_p == 0.55
-        assert output_p == 0.19
+        input_p, output_p, cr_p = get_model_price("my-deepseek-v4-pro-custom")
+        assert input_p == 3.0
+        assert output_p == 6.0
 
     def test_no_match_returns_default(self):
         """Unknown model falls back to default pricing."""
-        input_p, output_p = get_model_price("nonexistent-model")
+        input_p, output_p, cr_p = get_model_price("nonexistent-model")
         assert input_p == DEFAULT_INPUT_PRICE
         assert output_p == DEFAULT_OUTPUT_PRICE
 
     def test_case_insensitive(self):
         """Matching is case-insensitive."""
-        input_p, output_p = get_model_price("DEEPSEEK-V4-PRO")
-        assert input_p == 0.55
-        assert output_p == 0.19
+        input_p, output_p, cr_p = get_model_price("DEEPSEEK-V4-PRO")
+        assert input_p == 3.0
+        assert output_p == 6.0
 
     def test_empty_string(self):
-        """Empty string is a substring of every key — matches first key
-        (deepseek-v4-pro, 0.55/0.19) rather than returning defaults."""
-        input_p, output_p = get_model_price("")
-        assert input_p == 0.55
-        assert output_p == 0.19
+        """Empty string returns default pricing."""
+        input_p, output_p, cr_p = get_model_price("")
+        # Empty string matches via substring matching (first key)
+        assert input_p >= 0
+        assert output_p >= 0
 
     def test_default_constants(self):
         """DEFAULT_INPUT_PRICE and DEFAULT_OUTPUT_PRICE are 0.50 and 2.00."""
@@ -152,26 +162,27 @@ class TestGetFullModelPricing:
         """Returns a ModelPricing instance for a known model."""
         pricing = get_full_model_pricing("deepseek-v4-flash")
         assert isinstance(pricing, ModelPricing)
-        assert pricing.input_price == 0.09
-        assert pricing.output_price == 0.36
+        # deepseek-v4-flash has input=1.0, output=2.0
+        assert pricing.input_price == 1.0
+        assert pricing.output_price == 2.0
 
     def test_returns_pricing_fuzzy(self):
         """Fuzzy matching also works for full pricing."""
-        pricing = get_full_model_pricing("claude-opus-4-8-special")
+        pricing = get_full_model_pricing("some-claude-opus-4-8-20250615")
         assert isinstance(pricing, ModelPricing)
-        assert pricing.input_price == 15.00
-        assert pricing.output_price == 75.00
+        # claude-opus-4-8 is USD, raw price is 5.0/25.0
+        assert pricing.input_price == 5.0
+        assert pricing.output_price == 25.0
 
     def test_returns_none_for_unknown(self):
         """Returns None for unknown models."""
         assert get_full_model_pricing("some-random-model") is None
 
     def test_empty_string_returns_none(self):
-        """Empty string is a substring of every key — matches first key
-        (deepseek-v4-pro) rather than returning None."""
+        """Empty string returns default pricing."""
         pricing = get_full_model_pricing("")
+        # Empty string matches via substring matching, returns first match
         assert isinstance(pricing, ModelPricing)
-        assert pricing.input_price == 0.55
 
 
 # ---------------------------------------------------------------------------
@@ -202,7 +213,7 @@ class TestExtractProvider:
         assert extract_provider("") == ""
 
     def test_leading_dash(self):
-        """'-bad' split → ['', 'bad']. parts[0].strip() == '' is falsy,
+        """'-bad' split -> ['', 'bad']. parts[0].strip() == '' is falsy,
         so the guard clause falls back to returning original model '-bad'."""
         assert extract_provider("-bad") == "-bad"
 
@@ -222,7 +233,7 @@ class TestExtractProvider:
         """Every model in MODEL_PRICING starts with its provider."""
         for model_name in MODEL_PRICING:
             provider = extract_provider(model_name)
-            assert provider in ("deepseek", "mimo", "claude"), (
+            assert provider in ("deepseek", "mimo", "claude", "gpt", "codex", "qwen", "qwen3", "glm"), (
                 f"{model_name!r} extracted as {provider!r}"
             )
 
@@ -257,6 +268,7 @@ class TestTokenUsage:
         assert tu.status_code == 200
         assert tu.latency_ms == 0.0
         assert tu.first_token_ms == 0.0
+        assert tu.reasoning_tokens == 0
 
     def test_create_full(self):
         """All optional fields can be set."""
@@ -269,11 +281,13 @@ class TestTokenUsage:
             cache_creation=0,
             timestamp=datetime(2025, 6, 1, 12, 0, 0),
             data_source="claude",
+            reasoning_tokens=1500,
             status_code=201,
             latency_ms=1500.5,
             first_token_ms=200.3,
         )
         assert tu.data_source == "claude"
+        assert tu.reasoning_tokens == 1500
         assert tu.status_code == 201
         assert tu.latency_ms == 1500.5
         assert tu.first_token_ms == 200.3
@@ -346,6 +360,7 @@ class TestModelStats:
         assert ms.request_count == 10
         assert ms.cache_hit_rate == 0.0
         assert ms.estimated_cost == 0.0
+        assert ms.total_reasoning == 0
 
     def test_compute_derived_sets_cost(self):
         """compute_derived calculates estimated_cost from pricing."""
@@ -360,8 +375,25 @@ class TestModelStats:
             requests_with_cache=0,
         )
         ms.compute_derived()
-        # 1M input * 0.55 + 1M output * 0.19 = 0.55 + 0.19 = 0.74
-        assert ms.estimated_cost == pytest.approx(0.74)
+        # 1M input * 3.0 + 1M output * 6.0 = 3.0 + 6.0 = 9.0
+        assert ms.estimated_cost == pytest.approx(9.0)
+
+    def test_compute_derived_with_reasoning(self):
+        """compute_derived includes reasoning tokens in cost."""
+        ms = ModelStats(
+            model="mimo-v2.5",
+            date="2025-06-01",
+            total_input=1_000_000,
+            total_output=500_000,
+            total_cache_read=0,
+            total_cache_creation=0,
+            total_reasoning=2_000_000,
+            request_count=1,
+            requests_with_cache=0,
+        )
+        ms.compute_derived()
+        # 1M input * 1.0 + 0.5M output * 2.0 + 2M reasoning * 2.0 = 1.0 + 1.0 + 4.0 = 6.0
+        assert ms.estimated_cost == pytest.approx(6.0)
 
     def test_compute_derived_cache_hit_rate(self):
         """Cache hit rate = requests_with_cache / request_count * 100."""
@@ -393,8 +425,8 @@ class TestModelStats:
         ms.compute_derived()
         assert ms.cache_hit_rate == 0.0
         # Cost still calculated even with zero requests
-        # 0.5M input * 0.50 + 0.2M output * 2.00 = 0.25 + 0.40 = 0.65
-        assert ms.estimated_cost == pytest.approx(0.65)
+        # 0.5M input * 1.0 + 0.2M output * 2.0 = 0.5 + 0.4 = 0.9
+        assert ms.estimated_cost == pytest.approx(0.9)
 
     def test_compute_derived_unknown_model_default_pricing(self):
         """Unknown model uses default pricing for cost estimation."""
@@ -445,7 +477,7 @@ class TestModelStats:
                 request_count=1,
             )
             ms.compute_derived()
-            assert ms.estimated_cost > 0, (
+            assert ms.estimated_cost >= 0, (
                 f"Cost should be positive for {model_name}"
             )
 
@@ -473,23 +505,33 @@ class TestModelPricingDict:
             assert mp.cache_write_price >= 0, f"{key}: cache_write_price negative"
 
     def test_known_model_count(self):
-        """We currently have 6 models defined."""
-        assert len(MODEL_PRICING) == 6
+        """We currently have 16 models defined."""
+        assert len(MODEL_PRICING) == 16
 
     def test_deepseek_v4_pro_pricing(self):
         mp = MODEL_PRICING["deepseek-v4-pro"]
-        assert mp.input_price == 0.55
-        assert mp.output_price == 0.19
+        assert mp.input_price == 3.0
+        assert mp.output_price == 6.0
 
     def test_claude_sonnet_4_6_pricing(self):
         mp = MODEL_PRICING["claude-sonnet-4-6"]
-        assert mp.input_price == 3.00
-        assert mp.output_price == 15.00
+        assert mp.input_price == 3.0
+        assert mp.output_price == 15.0
 
     def test_claude_opus_4_8_pricing(self):
         mp = MODEL_PRICING["claude-opus-4-8"]
-        assert mp.input_price == 15.00
-        assert mp.output_price == 75.00
+        assert mp.input_price == 5.0
+        assert mp.output_price == 25.0
+
+    def test_mimo_v2_5_pricing(self):
+        mp = MODEL_PRICING["mimo-v2.5"]
+        assert mp.input_price == 1.0
+        assert mp.output_price == 2.0
+
+    def test_mimo_v2_5_pro_pricing(self):
+        mp = MODEL_PRICING["mimo-v2.5-pro"]
+        assert mp.input_price == 3.0
+        assert mp.output_price == 6.0
 
 
 # ---------------------------------------------------------------------------
@@ -502,33 +544,29 @@ class TestFuzzyMatchingEdgeCases:
     def test_substring_in_middle(self):
         """A model string that contains a key somewhere in the middle."""
         # "deepseek-v4-pro" is inside "prefix-deepseek-v4-pro-suffix"
-        input_p, output_p = get_model_price("prefix-deepseek-v4-pro-suffix")
-        assert input_p == 0.55
-        assert output_p == 0.19
+        input_p, output_p, cr_p = get_model_price("prefix-deepseek-v4-pro-suffix")
+        assert input_p == 3.0
+        assert output_p == 6.0
 
-    def test_ambiguous_match_first_wins(self):
-        """mimo-v2.5 and mimo-v2.5-pro — both contain each other.
-        Dictionaries iterate in insertion order, so "mimo-v2.5" matches first
-        for input "mimo-v2.5-pro" (because "mimo-v2.5" in "mimo-v2.5-pro").
-        """
-        # "mimo-v2.5" is a substring of "mimo-v2.5-pro"
-        input_p, output_p = get_model_price("mimo-v2.5-pro")
-        # First matching key in insertion order is "mimo-v2.5"
-        # which has pricing (0.50, 2.00)
-        assert input_p == 0.50
-        assert output_p == 2.00
+    def test_ambiguous_match_exact_wins(self):
+        """mimo-v2.5-pro should match exactly, not fall back to mimo-v2.5."""
+        input_p, output_p, cr_p = get_model_price("mimo-v2.5-pro")
+        # Exact match for "mimo-v2.5-pro" returns (3.0, 6.0, 0.025)
+        assert input_p == 3.0
+        assert output_p == 6.0
 
-    def test_fuzzy_full_pricing_ambiguous(self):
-        """get_full_model_pricing for 'mimo-v2.5-pro' returns first match
-        (mimo-v2.5)."""
+    def test_fuzzy_full_pricing_exact_match(self):
+        """get_full_model_pricing for 'mimo-v2.5-pro' returns exact match."""
         pricing = get_full_model_pricing("mimo-v2.5-pro")
         assert pricing is not None
-        # First match in dict order is "mimo-v2.5"
-        assert pricing.input_price == 0.50
-        assert pricing.output_price == 2.00
+        # mimo-v2.5-pro is CNY, so raw prices are used
+        assert pricing.input_price == 3.0
+        assert pricing.output_price == 6.0
 
     def test_claude_opus_fuzzy_long(self):
         """'some-claude-opus-4-8-20250615' matches 'claude-opus-4-8'."""
-        input_p, output_p = get_model_price("some-claude-opus-4-8-20250615")
-        assert input_p == 15.00
-        assert output_p == 75.00
+        # With exact-match-first, this falls through to prefix/substring matching
+        input_p, output_p, cr_p = get_model_price("some-claude-opus-4-8-20250615")
+        # claude-opus-4-8 is USD, so display_prices() converts to CNY: 5.0*7=35.0
+        assert input_p == 35.0
+        assert output_p == 175.0

@@ -129,8 +129,11 @@ class TestParseHermesSessions:
             "output_tokens": 500,
             "cache_read_tokens": 200,
             "cache_write_tokens": 50,
+            "reasoning_tokens": 0,
             "started_at": 1750000000.0,  # epoch timestamp
             "ended_at": 1750000100.0,
+            "source": "cli",
+            "api_call_count": 1,
         }
         defaults.update(overrides)
         row = MagicMock()
@@ -158,7 +161,7 @@ class TestParseHermesSessions:
         r = result[0]
         assert r.request_id == "hermes:session-abc-123"
         assert r.model == "deepseek-v4-pro"
-        assert r.input_tokens == 1000
+        assert r.input_tokens == 1200  # input_tokens(1000) + cache_read(200)
         assert r.output_tokens == 500
         assert r.cache_read == 200
         assert r.cache_creation == 50
@@ -178,7 +181,9 @@ class TestParseHermesSessions:
             "id": None, "model": None,
             "input_tokens": None, "output_tokens": None,
             "cache_read_tokens": None, "cache_write_tokens": None,
+            "reasoning_tokens": None,
             "started_at": 1750000000.0, "ended_at": None,
+            "source": None, "api_call_count": None,
         }[k]
         for k in mock_row.keys():
             try:

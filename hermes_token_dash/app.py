@@ -27,6 +27,7 @@ from hermes_token_dash.parser_claude import (
     parse_jsonl,
     scan_claude_jsonls,
 )
+from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
 from hermes_token_dash.parser_hermes import parse_hermes_sessions
 from hermes_token_dash.widgets import (
     ModelsBox,
@@ -176,6 +177,8 @@ class TokenDashApp(App):
         for path in scan_claude_jsonls():
             all_records.extend(parse_jsonl(path))
         all_records.extend(parse_hermes_sessions())
+        for path in scan_codex_jsonls():
+            all_records.extend(parse_codex_jsonl(path))
         self._all_usages = all_records
         self._available_models = get_available_models(all_records)
 

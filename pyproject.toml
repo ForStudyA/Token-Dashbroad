@@ -22,5 +22,5 @@ all = ["pywebview>=5.0", "textual>=0.80"]
 [project.scripts]
 hermes-token-dash = "main:main"
 
-[tool.uv]
-dev-dependencies = ["pytest>=8.0"]
+[dependency-groups]
+dev = ["pytest>=8.0", "httpx2>=0.0.1"]

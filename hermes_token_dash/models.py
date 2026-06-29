@@ -80,11 +80,19 @@ DEFAULT_OUTPUT_PRICE = 2.00
 
 def get_model_price(model: str) -> tuple[float, float, float]:
     """Return (input_price, output_price, cache_read_price) in CNY.
-
     Uses fuzzy substring matching.  USD models are converted via
     ``EXCHANGE_RATE``; CNY models are returned as-is.
     """
     model_lower = model.lower()
+    # 精确匹配优先（避免 mimo-v2.5-pro 匹配到 mimo-v2.5）
+    for key, pricing in MODEL_PRICING.items():
+        if key == model_lower:
+            return pricing.display_prices()
+    # 前缀匹配（key是model的前缀）
+    for key, pricing in MODEL_PRICING.items():
+        if model_lower.startswith(key):
+            return pricing.display_prices()
+    # 回退到包含匹配
     for key, pricing in MODEL_PRICING.items():
         if key in model_lower or model_lower in key:
             return pricing.display_prices()
@@ -94,9 +102,18 @@ def get_model_price(model: str) -> tuple[float, float, float]:
 def get_full_model_pricing(model: str) -> ModelPricing | None:
     """Return the full ``ModelPricing`` entry for *model*, or *None*.
 
-    Uses the same fuzzy matching as ``get_model_price``.
+    Uses the same matching as ``get_model_price``.
     """
     model_lower = model.lower()
+    # 精确匹配优先
+    for key, pricing in MODEL_PRICING.items():
+        if key == model_lower:
+            return pricing
+    # 前缀匹配
+    for key, pricing in MODEL_PRICING.items():
+        if model_lower.startswith(key):
+            return pricing
+    # 回退到包含匹配
     for key, pricing in MODEL_PRICING.items():
         if key in model_lower or model_lower in key:
             return pricing
@@ -133,6 +150,7 @@ class TokenUsage:
     cache_creation: int
     timestamp: datetime
     data_source: str = "unknown"
+    reasoning_tokens: int = 0  # 推理tokens (MiMo等推理模型)
     status_code: int = 200
     latency_ms: float = 0.0
     first_token_ms: float = 0.0
@@ -152,6 +170,7 @@ class ModelStats:
     total_cache_read: int
     total_cache_creation: int
     request_count: int
+    total_reasoning: int = 0  # 推理tokens总计
     requests_with_cache: int = 0
     cache_hit_rate: float = 0.0       # request-level: requests_with_cache / request_count
     token_hit_rate: float = 0.0       # token-level: total_cache_read / total_input
@@ -166,6 +185,7 @@ class ModelStats:
         Cost formula: (input - cache_read) * input_price
                     + cache_read * cache_read_price
                     + output * output_price
+                    + reasoning * output_price  # reasoning按output计费
         (prices are per 1M tokens, already in CNY via get_model_price)
         """
         if self.request_count > 0:
@@ -182,4 +202,5 @@ class ModelStats:
             non_cache_input / 1_000_000 * in_price
             + self.total_cache_read / 1_000_000 * cr_price
             + self.total_output / 1_000_000 * out_price
+            + self.total_reasoning / 1_000_000 * out_price  # reasoning按output价格
         )
