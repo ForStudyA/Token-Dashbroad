@@ -31,55 +31,122 @@ from hermes_token_dash.parser_claude import (
 from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
 from hermes_token_dash.parser_hermes import parse_hermes_sessions
 
-def _get_user_input_counts(tz_offset: int = 8, time_filter: str = "all", start: str = "", end: str = "") -> dict[str, int]:
-    """Get user input count per model from Hermes messages table."""
+
+
+def _get_user_input_counts(
+    tz_offset: int = 8,
+    time_filter: str = "all",
+    start: str = "",
+    end: str = "",
+    source: str = "",
+    profile: str = "",
+    agent: str = "",
+    model: str = "",
+) -> dict[str, int]:
+    """Get filtered user-message counts per Hermes model."""
     import sqlite3
-    import os
+    from pathlib import Path
     from datetime import datetime, timedelta, timezone as tz
-    
-    counts = {}
-    db_path = os.path.expanduser("~/AppData/Local/hermes/state.db")
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        cur = conn.cursor()
-        
-        # 构建时间筛选条件
-        time_condition = ""
-        params = []
-        if time_filter != "all":
-            from hermes_token_dash.parser_claude import get_time_cutoff
-            cutoff = get_time_cutoff(time_filter, tz_offset)
-            cutoff_ts = cutoff.timestamp()
-            time_condition = "AND s.started_at >= ?"
-            params.append(cutoff_ts)
-        
-        cur.execute(f"""
-            SELECT s.model, COUNT(*) as cnt
-            FROM messages m
-            JOIN sessions s ON m.session_id = s.id
-            WHERE m.role = 'user' AND s.model IS NOT NULL {time_condition}
-            GROUP BY s.model
-        """, params)
-        for row in cur.fetchall():
-            counts[row[0]] = row[1]
-        conn.close()
-    except Exception:
-        pass
+
+    if source and source != "hermes":
+        return {}
+
+    counts: dict[str, int] = {}
+    dbs = []
+    main_db = Path.home() / "AppData" / "Local" / "hermes" / "state.db"
+    if main_db.exists():
+        dbs.append(main_db)
+    profiles_dir = Path.home() / "AppData" / "Local" / "hermes" / "profiles"
+    if profiles_dir.is_dir():
+        for profile_dir in profiles_dir.iterdir():
+            if profile_dir.is_dir():
+                db_path = profile_dir / "state.db"
+                if db_path.exists():
+                    dbs.append(db_path)
+
+    user_tz = tz(timedelta(hours=tz_offset))
+    for db_path in dbs:
+        db_profile = "default" if db_path.parent.name == "hermes" else db_path.parent.name
+        if profile and db_profile != profile:
+            continue
+
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            cur = conn.cursor()
+            conditions = []
+            params: list = []
+
+            if time_filter == "custom":
+                if start:
+                    try:
+                        s = datetime.fromisoformat(start)
+                        if s.tzinfo is None:
+                            s = s.replace(tzinfo=user_tz)
+                        conditions.append("s.started_at >= ?")
+                        params.append(s.timestamp())
+                    except (ValueError, TypeError):
+                        pass
+                if end:
+                    try:
+                        e = datetime.fromisoformat(end)
+                        if e.tzinfo is None:
+                            e = e.replace(tzinfo=user_tz)
+                        conditions.append("s.started_at <= ?")
+                        params.append(e.timestamp())
+                    except (ValueError, TypeError):
+                        pass
+            elif time_filter != "all":
+                from hermes_token_dash.parser_claude import get_time_cutoff
+
+                cutoff = get_time_cutoff(time_filter, tz_offset)
+                conditions.append("s.started_at >= ?")
+                params.append(cutoff.timestamp())
+
+            if model:
+                conditions.append("s.model = ?")
+                params.append(model)
+            if agent:
+                conditions.append("COALESCE(s.source, 'unknown') = ?")
+                params.append(agent.removeprefix("hermes:"))
+
+            extra_conditions = "".join(f" AND {condition}" for condition in conditions)
+            cur.execute(f"""
+                SELECT s.model, COUNT(*) as cnt
+                FROM messages m
+                JOIN sessions s ON m.session_id = s.id
+                WHERE m.role = 'user' AND s.model IS NOT NULL {extra_conditions}
+                GROUP BY s.model
+            """, params)
+            for row in cur.fetchall():
+                counts[row[0]] = counts.get(row[0], 0) + row[1]
+            conn.close()
+        except Exception:
+            pass
+
     return counts
+
 
 app = FastAPI(title="Hermes Token Dashboard")
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
-                   allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:8765", "http://localhost:8765"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 STATIC = Path(__file__).parent / "static"
 STATIC.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
-# Cache parsed data with TTL (auto-refresh after 30 seconds)
+# Cache parsed data with TTL (auto-refresh in background after expiry)
+import threading
+
 _cache: list = []
 _cache_time: float = 0.0
-CACHE_TTL: float = 30.0  # seconds
+CACHE_TTL: float = 300.0  # 5 minutes
+_cache_lock = threading.Lock()
+_bg_refreshing = False
 
 
 @app.on_event("startup")
@@ -89,46 +156,119 @@ async def _preload():
     await asyncio.to_thread(_load_cache)
 
 
+# Incremental file cache: {filepath: (mtime, size, records)}
+_file_cache: dict[str, tuple[float, int, list]] = {}
+
+
 def _load_cache() -> list:
-    """Scan and parse all JSONL files + Hermes session DBs + Codex sessions.  Cached until next refresh."""
+    """Scan and parse all JSONL files + Hermes session DBs + Codex sessions.
+
+    Uses incremental file-level caching: only re-parses files whose
+    mtime or size changed since last load.  Unchanged files reuse their
+    cached records.
+    """
     global _cache, _cache_time
-    import time
-    records = []
+    import os, time
+
+    records: list = []
+    seen_files: set[str] = set()
+
     # Claude Code
     for f in scan_claude_jsonls():
-        records.extend(parse_jsonl(f))
-    # Hermes Agent
+        key = str(f)
+        seen_files.add(key)
+        try:
+            st = os.stat(f)
+            cached = _file_cache.get(key)
+            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+                records.extend(cached[2])
+            else:
+                recs = parse_jsonl(f)
+                _file_cache[key] = (st.st_mtime, st.st_size, recs)
+                records.extend(recs)
+        except OSError:
+            records.extend(parse_jsonl(f))
+
+    # Hermes Agent (no file-level cache — reads DBs directly)
     records.extend(parse_hermes_sessions())
+
     # Codex CLI
     for f in scan_codex_jsonls():
-        records.extend(parse_codex_jsonl(f))
-    _cache = records
-    _cache_time = time.time()
+        key = str(f)
+        seen_files.add(key)
+        try:
+            st = os.stat(f)
+            cached = _file_cache.get(key)
+            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
+                records.extend(cached[2])
+            else:
+                recs = parse_codex_jsonl(f)
+                _file_cache[key] = (st.st_mtime, st.st_size, recs)
+                records.extend(recs)
+        except OSError:
+            records.extend(parse_codex_jsonl(f))
+
+    # Purge entries for files that no longer exist
+    stale = set(_file_cache) - seen_files
+    for k in stale:
+        del _file_cache[k]
+
+    with _cache_lock:
+        _cache = records
+        _cache_time = time.time()
     return _cache
 
 
-def _get_records(force: bool = False) -> list:
-    global _cache, _cache_time
-    import time
-    if force or not _cache or (time.time() - _cache_time) > CACHE_TTL:
+def _bg_refresh():
+    """Background cache refresh — non-blocking."""
+    global _bg_refreshing
+    try:
         _load_cache()
+    finally:
+        with _cache_lock:
+            _bg_refreshing = False
+
+
+def _get_records(force: bool = False) -> list:
+    """Return cached records. Never blocks on cache hit.
+
+    - ``force=True`` → synchronous reload (explicit refresh).
+    - Cache warm → return immediately.
+    - Cache stale → return stale data, trigger background refresh.
+    - Cache empty → block until first load completes.
+    """
+    global _bg_refreshing
+    import time
+    if force:
+        _load_cache()
+        return _cache
+    with _cache_lock:
+        if _cache:
+            if (time.time() - _cache_time) > CACHE_TTL and not _bg_refreshing:
+                _bg_refreshing = True
+                threading.Thread(target=_bg_refresh, daemon=True).start()
+            return _cache
+    # Empty cache — must block for first load
+    _load_cache()
     return _cache
 
 
 def _apply_time_filter(records: list, time: str, start: str, end: str, tz_offset: int = 8):
-    """Filter *records* by *time* preset or custom [*start*, *end*] ISO range.
+    """Filter *records* by *time* preset or custom [*start*, *end*] datetime range.
 
-    When *time* is ``\"custom\"``, *start* and/or *end* (ISO-8601
-    datetime strings) are parsed as UTC and used as inclusive bounds.
-    Otherwise ``get_time_cutoff(time, tz_offset)`` is used as a lower bound.
+    When *time* is ``"custom"``, *start* and/or *end* are parsed as local
+    datetime strings in the user's timezone (identified by *tz_offset*) and
+    used as inclusive bounds.  Otherwise ``get_time_cutoff(time, tz_offset)``
+    is used as a lower bound.
     """
-    from datetime import datetime, timezone as _tz
+    from datetime import datetime, timezone as _tz, timedelta as _td
+    user_tz = _tz(_td(hours=tz_offset))
     if time == "custom":
         if start:
             try:
                 s = datetime.fromisoformat(start)
                 if s.tzinfo is None:
-                    s = s.replace(tzinfo=_tz.utc)
+                    s = s.replace(tzinfo=user_tz)
                 records = [r for r in records if r.timestamp >= s]
             except (ValueError, TypeError):
                 pass
@@ -136,7 +276,7 @@ def _apply_time_filter(records: list, time: str, start: str, end: str, tz_offset
             try:
                 e = datetime.fromisoformat(end)
                 if e.tzinfo is None:
-                    e = e.replace(tzinfo=_tz.utc)
+                    e = e.replace(tzinfo=user_tz)
                 records = [r for r in records if r.timestamp <= e]
             except (ValueError, TypeError):
                 pass
@@ -232,6 +372,7 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
         records = [r for r in records if r.profile == profile]
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
+    user_count_time = time
     if time == "custom":
         records = _apply_time_filter(records, "custom", start, end, tz)
         time = "all"
@@ -241,7 +382,9 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
         stats = [s for s in stats if s.model == model]
 
     # 获取每个模型的用户输入次数
-    user_input_counts = _get_user_input_counts(tz, time, start, end)
+    user_input_counts = _get_user_input_counts(
+        tz, user_count_time, start, end, source, profile, agent, model
+    )
 
     result = []
     for s in stats:
@@ -249,7 +392,7 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
             "model": s.model,
             "date": s.date,
             "input": s.total_input,
-            "output": s.total_output,
+            "output": s.total_output + s.total_reasoning,
             "cache_read": s.total_cache_read,
             "cache_create": s.total_cache_creation,
             "requests": s.request_count,
@@ -272,6 +415,7 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
         records = [r for r in records if r.profile == profile]
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
+    user_count_time = time
     if time == "custom":
         records = _apply_time_filter(records, "custom", start, end, tz)
         time = "all"
@@ -280,7 +424,7 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
         stats = [s for s in stats if s.model == model]
 
     ti = sum(s.total_input for s in stats)
-    to = sum(s.total_output for s in stats)
+    to = sum(s.total_output + s.total_reasoning for s in stats)
     tcr = sum(s.total_cache_read for s in stats)
     tcc = sum(s.total_cache_creation for s in stats)
     tc = sum(s.estimated_cost for s in stats)
@@ -290,7 +434,9 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
     token_hit = round(tcr / ti * 100, 1) if ti > 0 else 0
 
     # 获取用户输入次数
-    user_input_counts = _get_user_input_counts(tz, time, start, end)
+    user_input_counts = _get_user_input_counts(
+        tz, user_count_time, start, end, source, profile, agent, model
+    )
     total_user_inputs = sum(user_input_counts.get(s.model, 0) for s in stats)
 
     return {
@@ -304,35 +450,35 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
         "token_hit_rate": token_hit,
         "groups": len(stats),
         "user_inputs": total_user_inputs,
-        "by_source": _compute_by_source_summary(records, time) if not source else [],
+        "by_source": _compute_by_source_summary(records, time, tz) if not source else [],
     }
 
 
-def _compute_by_source_summary(records: list, time: str) -> list[dict]:
+def _compute_by_source_summary(records: list, time: str, tz_offset: int = 8) -> list[dict]:
     """Compute per-source aggregated summary."""
     from collections import defaultdict
-    filtered = _apply_time_filter(records, time, "", "")
-
+    filtered = _apply_time_filter(records, time, "", "", tz_offset)
     src: dict[str, dict] = {}
     for r in filtered:
         s = r.data_source or "unknown"
         if s not in src:
             src[s] = {"source": s, "requests": 0, "input": 0, "output": 0,
-                       "cache_read": 0, "cache_creation": 0, "cost": 0.0,
-                       "models": {}}
+                       "cache_read": 0, "cache_creation": 0,
+                       "cost": 0.0, "models": {}}
         d = src[s]
-        d["requests"] += 1
+        d["requests"] += r.api_call_count
         d["input"] += r.input_tokens
         d["output"] += r.output_tokens
         d["cache_read"] += r.cache_read
         d["cache_creation"] += r.cache_creation
+        d["output"] += getattr(r, "reasoning_tokens", 0)
         in_price, out_price, cr_price = get_model_price(r.model)
         d["cost"] += ((max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
                       + r.cache_read / 1_000_000 * cr_price
-                      + r.output_tokens / 1_000_000 * out_price))
+                      + r.output_tokens / 1_000_000 * out_price
+                      + getattr(r, "reasoning_tokens", 0) / 1_000_000 * out_price))
         # Per-model counts within source
-        d["models"][r.model] = d["models"].get(r.model, 0) + 1
-
+        d["models"][r.model] = d["models"].get(r.model, 0) + r.api_call_count
     result = []
     for s, d in sorted(src.items(), key=lambda x: -x[1]["requests"]):
         result.append({
@@ -379,12 +525,13 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
         in_price, out_price, cr_price = get_model_price(r.model)
         cost = round(max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
                      + r.cache_read / 1_000_000 * cr_price
-                     + r.output_tokens / 1_000_000 * out_price, 6)
+                     + r.output_tokens / 1_000_000 * out_price
+                     + getattr(r, "reasoning_tokens", 0) / 1_000_000 * out_price, 6)
         items.append({
             "request_id": r.request_id,
             "model": r.model,
             "input_tokens": r.input_tokens,
-            "output_tokens": r.output_tokens,
+            "output_tokens": r.output_tokens + getattr(r, "reasoning_tokens", 0),
             "cache_read": r.cache_read,
             "cache_creation": r.cache_creation,
             "timestamp": r.timestamp.isoformat(),
@@ -425,18 +572,17 @@ def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str =
         })
         d["requests"] += s.request_count
         d["input"] += s.total_input
-        d["output"] += s.total_output
+        d["output"] += s.total_output + s.total_reasoning
         d["cache_read"] += s.total_cache_read
         d["cache_creation"] += s.total_cache_creation
         d["cost"] += round(s.estimated_cost, 4)
-
     result = sorted(daily.values(), key=lambda x: x["date"])
     return result
 
 
 @app.get("/api/providers")
 def api_providers(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
-                  start: str = Query(""), end: str = Query("")):
+                  start: str = Query(""), end: str = Query(""), tz: int = Query(8)):
     """Return per-provider aggregated stats.
 
     Provider is extracted from each record's model field via
@@ -450,7 +596,7 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
 
-    filtered = _apply_time_filter(records, time, start, end)
+    filtered = _apply_time_filter(records, time, start, end, tz)
     if model:
         filtered = [r for r in filtered if r.model == model]
 
@@ -477,17 +623,18 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
         d["total_output_tokens"] += r.output_tokens
         d["total_cache_read"] += r.cache_read
         d["total_cache_creation"] += r.cache_creation
+        d["total_output_tokens"] += getattr(r, "reasoning_tokens", 0)
         d["models"].add(r.model)
         if r.status_code == 200:
             d["success_count"] += r.api_call_count  # 与request_count一致
         if r.latency_ms > 0:
             d["latencies"].append(r.latency_ms)
-
         in_price, out_price, cr_price = get_model_price(r.model)
         d["total_cost"] += (
             max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
             + r.cache_read / 1_000_000 * cr_price
             + r.output_tokens / 1_000_000 * out_price
+            + getattr(r, "reasoning_tokens", 0) / 1_000_000 * out_price
         )
 
     result = []
@@ -542,7 +689,8 @@ def api_agents(source: str = Query(""), profile: str = Query("")):
 def api_agent_stats(time: str = Query("all"), model: str = Query(""),
                     source: str = Query(""), profile: str = Query(""),
                     agent: str = Query(""),
-                    start: str = Query(""), end: str = Query("")):
+                    start: str = Query(""), end: str = Query(""),
+                    tz: int = Query(8)):
     """Agent × model cross statistics — one row per (agent, model) combination."""
     from collections import defaultdict
 
@@ -552,7 +700,7 @@ def api_agent_stats(time: str = Query("all"), model: str = Query(""),
     if profile:
         records = [r for r in records if r.profile == profile]
 
-    filtered = _apply_time_filter(records, time, start, end)
+    filtered = _apply_time_filter(records, time, start, end, tz)
     if model:
         filtered = [r for r in filtered if r.model == model]
     if agent:
@@ -665,8 +813,10 @@ def api_update_settings(body: SettingsUpdate):
 @app.get("/api/balance/deepseek")
 def api_balance_deepseek():
     """Query DeepSeek balance via official API."""
+    import json
     import os
-    import requests as _req
+    import urllib.error
+    import urllib.request
     
     api_key = os.environ.get("DEEPSEEK_API_KEY", "")
     if not api_key:
@@ -687,14 +837,15 @@ def api_balance_deepseek():
         return {"status": "no_key", "message": "未配置 API Key"}
     
     try:
-        resp = _req.get(
+        req = urllib.request.Request(
             "https://api.deepseek.com/user/balance",
             headers={"Authorization": f"Bearer {api_key}"},
-            timeout=10
         )
-        data = resp.json()
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            status_code = resp.status
+            data = json.loads(resp.read().decode("utf-8"))
         
-        if resp.status_code == 401:
+        if status_code == 401 or data.get("code") == 401:
             return {"status": "invalid_key", "message": "API Key 无效"}
         
         if "balance_infos" in data and data["balance_infos"]:
@@ -712,6 +863,11 @@ def api_balance_deepseek():
         
         return {"status": "error", "message": str(data)}
         
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return {"status": "invalid_key", "message": "Invalid API Key"}
+        body = e.read().decode("utf-8", errors="replace")
+        return {"status": "error", "message": body or str(e)}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -735,9 +891,10 @@ def _mimo_login_sync():
     BALANCE_URL = "https://platform.xiaomimimo.com/#/console/balance"
     
     exe = None
+    home = Path.home()
     for p in [
-        r"C:\Users\20107\AppData\Local\ms-playwright\chromium-1228\chrome-win64\chrome.exe",
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        home / "AppData/Local/ms-playwright/chromium-1228/chrome-win64/chrome.exe",
+        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
     ]:
         if os.path.exists(p):
             exe = p
@@ -787,9 +944,10 @@ def _query_mimo_balance_sync(cookies):
     from playwright.sync_api import sync_playwright
     
     exe = None
+    home = Path.home()
     for p in [
-        r"C:\Users\20107\AppData\Local\ms-playwright\chromium-1228\chrome-win64\chrome.exe",
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        home / "AppData/Local/ms-playwright/chromium-1228/chrome-win64/chrome.exe",
+        Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
     ]:
         if os.path.exists(p):
             exe = p

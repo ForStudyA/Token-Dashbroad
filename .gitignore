@@ -16,3 +16,25 @@ Thumbs.db
 
 # Hermes local
 .hermes/
+
+# Sensitive files
+mimo_cookies.json
+deepseek_key.txt
+*.key
+
+# Coverage
+.coverage
+htmlcov/
+.coverage.*
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.log
+
+# pip output
+=5.0
