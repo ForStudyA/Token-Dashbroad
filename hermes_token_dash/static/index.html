@@ -34,6 +34,36 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 .btn:hover{opacity:.85}
 .btn-muted{background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer}
 .btn-muted:hover{color:var(--white);background:var(--border)}
+.proxy-page{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.proxy-grid{display:grid;grid-template-columns:480px 1fr;gap:12px;min-height:0}
+.proxy-panel{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
+.proxy-panel h2{font-size:13px;color:var(--white);margin-bottom:10px}
+.proxy-head{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.proxy-head h2{margin-bottom:0}
+.proxy-switch{display:inline-flex;align-items:center;gap:8px;background:var(--card);color:var(--muted);border:1px solid var(--border);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;user-select:none}
+.proxy-switch:hover{color:var(--white);background:var(--border)}
+.proxy-switch:disabled{opacity:.55;cursor:wait}
+.proxy-switch .track{width:36px;height:20px;border-radius:999px;background:var(--border);border:1px solid #2a3648;position:relative;transition:.16s}
+.proxy-switch .track::after{content:'';position:absolute;width:14px;height:14px;left:2px;top:2px;border-radius:50%;background:var(--muted);transition:.16s}
+.proxy-switch.on{color:var(--white)}
+.proxy-switch.on .track{background:rgba(57,186,230,.22);border-color:var(--accent)}
+.proxy-switch.on .track::after{left:18px;background:var(--accent)}
+.proxy-form{display:flex;flex-direction:column;gap:8px}
+.proxy-form input,.proxy-form select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:7px 9px;font-size:12px;outline:none}
+.proxy-form input:focus,.proxy-form select:focus{border-color:var(--accent)}
+.proxy-actions{display:flex;gap:8px;align-items:center}
+.proxy-list{display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto}
+.proxy-list::-webkit-scrollbar{width:4px}
+.proxy-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.proxy-item{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,.02);font-size:12px}
+.proxy-item .provider-actions{display:flex;gap:6px;align-items:center}
+.proxy-item .provider-actions .btn-enable{display:none}
+.proxy-item:hover .provider-actions .btn-enable{display:inline-block}
+.proxy-muted{color:var(--muted);font-size:11px}
+.proxy-table{width:100%;border-collapse:collapse;font-size:12px}
+.proxy-table th,.proxy-table td{border-bottom:1px solid var(--border);padding:7px 8px;text-align:left;white-space:nowrap}
+.proxy-table th{color:var(--accent);font-size:11px;text-transform:uppercase}
+.proxy-table td.tr{text-align:right}
 
 /* body */
 .body{display:flex;flex:1;overflow:hidden}
@@ -154,6 +184,8 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <select v-model="refreshMs"><option value="0">手动</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
 <button class="btn-muted" @click="showSettings=!showSettings">&#x26ED; 设置</button>
 <button class="btn-muted" @click="refreshAll" :disabled="isRefreshing" :style="isRefreshing?'opacity:0.5;cursor:wait':''">{{isRefreshing?'&#8987; 刷新中...':'&#8635; 刷新'}}</button>
+<button class="btn-muted" @click="view=view==='proxy'?'dashboard':'proxy'">{{view==='proxy'?'仪表盘':'代理'}}</button>
+<button class="proxy-switch" :class="{on:proxyEnabled}" @click="toggleProxyStatus" :disabled="proxyStatusSaving" title="启用或关闭本地代理转发"><span class="track"></span><span>{{proxyEnabled?'代理已启用':'代理已关闭'}}</span></button>
 <div style="margin-left:auto;text-align:right;line-height:1.4">
 <div style="font-size:12px;color:var(--muted)">上次刷新 {{lastRefresh}}</div>
 <div style="font-size:11px;color:var(--muted)">当前时间 {{currentTime}} <span style="opacity:0.6">(UTC{{timezoneFilter>=0?'+':''}}{{timezoneFilter}})</span></div>
@@ -168,7 +200,7 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <input v-model.number="timezoneFilter" @change="timezoneFilter=Math.max(-12,Math.min(14,timezoneFilter==null?8:timezoneFilter))" type="number" min="-12" max="14" step="1" placeholder="UTC±" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;width:64px;font-size:12px">
 </div>
 
-<div class="body">
+<div class="body" v-show="view==='dashboard'">
 <div class="sidebar">
 <div class="slabel">模型</div>
 <div class="mitem" :class="{active:activeModel===''}" @click="activeModel='';refreshView()"><span>全部</span><span class="cnt">{{modelsTotal}}</span></div>
@@ -273,6 +305,58 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 </div></div>
 
 <div class="sbar">就绪 · {{lastRefresh}} · {{modelsTotal}} 条<span style="margin-left:auto">Token 消耗仪表盘 v1.4</span></div>
+<div class="proxy-page" v-show="view==='proxy'">
+<div class="proxy-panel">
+<h2>Hermes 代理 <span v-if="activeMapping.target_model" style="font-size:13px;color:var(--green);font-weight:400">→ {{activeMapping.target_model}}</span></h2>
+<div class="proxy-muted">代理地址：http://127.0.0.1:8765/v1 · 接口：/v1/chat/completions · 数据库：~/.token-dashboard/token-dashboard.db</div>
+</div>
+<div class="proxy-grid">
+<div class="proxy-panel">
+<h2>上游提供商 <button class="btn-muted" style="font-size:11px;margin-left:8px" @click="showProviderForm=!showProviderForm">{{showProviderForm?'收起':'添加提供商'}}</button></h2>
+<div v-show="showProviderForm" class="proxy-form" style="margin-bottom:8px">
+<input v-model="providerForm.name" placeholder="提供商名称">
+<input v-model="providerForm.base_url" placeholder="上游地址，例如 https://api.deepseek.com">
+<input v-model="providerForm.api_key" type="password" placeholder="API Key">
+<div class="proxy-actions"><button class="btn" @click="saveProvider">保存提供商</button><button class="btn-muted" @click="resetProviderForm">清空</button></div>
+</div>
+<div class="proxy-list" style="margin-top:12px">
+<div class="proxy-item" v-for="p in proxyProviders" :key="p.id">
+<div><b>{{p.name}}</b><div class="proxy-muted">{{p.base_url}} · {{p.api_key||'未配置 Key'}}</div></div>
+<div class="provider-actions">
+<span v-if="providerInUse(p.id)" class="sbadge h" style="font-size:11px">使用中</span>
+<button v-else class="btn-enable btn-muted" style="font-size:11px;color:var(--green)" @click="toggleProvider(p)">启用</button>
+<button class="btn-muted" @click="editProvider(p)">编辑</button>
+<button class="btn-muted" style="color:var(--red)" @click="deleteProvider(p.id)">删除</button>
+</div>
+</div>
+<div class="empty" v-if="!proxyProviders.length">暂无提供商</div>
+</div>
+</div>
+<div class="proxy-panel">
+<h2>模型映射 <button class="btn-muted" style="font-size:11px;margin-left:8px" @click="showMappingForm=!showMappingForm">{{showMappingForm?'收起':'添加映射'}}</button></h2>
+<div v-show="showMappingForm" class="proxy-form" style="display:grid;grid-template-columns:1fr 180px auto;align-items:center;gap:8px;margin-bottom:8px">
+<input v-model="mappingForm.target_model" placeholder="上游实际模型，如 deepseek-chat">
+<select v-model.number="mappingForm.provider_id"><option :value="0">选择提供商</option><option v-for="p in proxyProviders" :value="p.id">{{p.name}}</option></select>
+<button class="btn" @click="saveMapping">保存</button>
+</div>
+<table class="proxy-table" style="margin-top:12px">
+<thead><tr><th>上游模型</th><th>提供商</th><th style="width:90px"></th><th></th></tr></thead>
+<tbody><tr v-for="m in (activeMapping.provider_id ? proxyMappings.filter(x=>x.provider_id===activeMapping.provider_id) : proxyMappings)" :key="m.id"><td>{{m.target_model}}</td><td>{{m.provider_name}}</td>
+<td><span v-if="activeMapping.target_model===m.target_model&&activeMapping.provider_id===m.provider_id" class="sbadge h" style="font-size:11px">使用中</span><button v-else class="btn-enable btn-muted" style="font-size:11px;color:var(--green)" @click="enableMapping(m)">启用</button></td>
+<td><div style="display:flex;gap:6px"><button class="btn-muted" @click="editMapping(m)">编辑</button><button class="btn-muted" style="color:var(--red)" @click="deleteMapping(m.id)">删除</button></div></td></tr></tbody>
+</table>
+<div class="empty" v-if="!proxyMappings.length">暂无模型映射。配置后所有请求将映射到指定的上游模型。</div>
+</div>
+</div>
+<div class="proxy-panel">
+<h2>最近请求</h2>
+<table class="proxy-table">
+<thead><tr><th>时间</th><th>提供商</th><th>请求模型</th><th>上游模型</th><th class="tr">输入</th><th class="tr">输出</th><th>状态</th><th class="tr">延迟</th><th class="tr">费用</th></tr></thead>
+<tbody><tr v-for="l in proxyLogs" :key="l.request_id"><td>{{stime(l.created_at_iso,timezoneFilter)}}</td><td>{{l.provider_name}}</td><td>{{l.request_model}}</td><td>{{l.model}}</td><td class="tr">{{fmt((l.input_tokens||0)+(l.cache_read_tokens||0))}}</td><td class="tr">{{fmt(l.output_tokens)}}</td><td :class="l.status_code===200?'g':'r'">{{l.status_code}}{{l.usage_missing?' · 无 usage':''}}</td><td class="tr">{{l.latency_ms}}ms</td><td class="tr">¥{{Number(l.total_cost_cny||0).toFixed(6)}}</td></tr></tbody>
+</table>
+<div class="empty" v-if="!proxyLogs.length">暂无代理请求</div>
+</div>
+</div>
 </div>
 
 <script>
@@ -292,6 +376,15 @@ const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agen
 const balance=ref({status:'loading',message:'加载中...',balances:{}})
 const dsBalance=ref({status:'loading',message:'加载中...',balances:{}})
 const showDsKeyInput=ref(false),dsKeyInput=ref('')
+const view=ref('dashboard')
+const proxyProviders=ref([]),proxyMappings=ref([]),proxyLogs=ref([])
+const proxyEnabled=ref(true),proxyStatusSaving=ref(false)
+const activeMapping=ref({target_model:'',provider_id:0})
+const lastMappings=ref({})
+const showProviderForm=ref(false)
+const showMappingForm=ref(false)
+const providerForm=ref({id:null,name:'',base_url:'',api_key:'',enabled:true})
+const mappingForm=ref({id:null,source_model:'',target_model:'',provider_id:0,enabled:true})
 
 const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天',custom:'自定义'}[timeFilter.value]))
 const merged=computed(()=>{const m={};const alias={'deepseek-chat':'deepseek-v4-flash'};for(const s of stats.value){const k=alias[s.model]||s.model;if(!m[k])m[k]={model:k,input:0,output:0,cache_read:0,cache_create:0,requests:0,requests_cache:0,cost:0,user_inputs:0};m[k].input+=s.input;m[k].output+=s.output;m[k].cache_read+=s.cache_read;m[k].cache_create+=s.cache_create;m[k].requests+=s.requests;m[k].requests_cache+=s.requests_cache;m[k].cost+=s.cost;m[k].user_inputs+=(s.user_inputs||0)}for(const k in m){m[k].hit_rate=m[k].requests?Math.round(m[k].requests_cache/m[k].requests*1000)/10:0;m[k].token_hit_rate=m[k].input?Math.round(m[k].cache_read/m[k].input*1000)/10:0}return Object.values(m)})
@@ -381,6 +474,19 @@ async function fetchAgents(){try{const r=await fetch('/api/agents'+q({source:sou
 async function fetchSettings(){try{const r=await fetch('/api/settings');const d=await r.json();exchangeRate.value=d.exchange_rate||7.25}catch(e){}}
 async function fetchPricing(){try{const r=await fetch('/api/pricing');const d=await r.json();const m={};d.forEach(p=>{m[p.model]=p});pricing.value=m}catch(e){}}
 async function saveSettings(){await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({exchange_rate:exchangeRate.value})});refreshAll()}
+async function fetchProxyConfig(){try{const[st,pr,mp,lg,am,lm]=await Promise.all([fetch('/api/proxy/status').then(r=>r.json()),fetch('/api/proxy/providers').then(r=>r.json()),fetch('/api/proxy/mappings').then(r=>r.json()),fetch('/api/proxy/logs?limit=100').then(r=>r.json()),fetch('/api/proxy/active-mapping').then(r=>r.json()),fetch('/api/proxy/last-mappings').then(r=>r.json())]);proxyEnabled.value=st.enabled!==false;proxyProviders.value=pr.providers||[];proxyMappings.value=mp.mappings||[];proxyLogs.value=lg.items||[];activeMapping.value=am||{target_model:'',provider_id:0};lastMappings.value=lm.last_mappings||{}}catch(e){}}
+async function saveProxyStatus(nextEnabled){proxyStatusSaving.value=true;const prev=proxyEnabled.value;proxyEnabled.value=!!nextEnabled;try{const r=await fetch('/api/proxy/status',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:proxyEnabled.value})});if(!r.ok)throw new Error('save failed');const d=await r.json();proxyEnabled.value=d.enabled!==false}catch(e){proxyEnabled.value=prev}finally{proxyStatusSaving.value=false}}
+function toggleProxyStatus(){if(proxyStatusSaving.value)return;saveProxyStatus(!proxyEnabled.value)}
+function resetProviderForm(){providerForm.value={id:null,name:'',base_url:'',api_key:'',enabled:false}}
+function editProvider(p){providerForm.value={id:p.id,name:p.name,base_url:p.base_url,api_key:'',enabled:!!p.enabled}}
+async function saveProvider(){if(!providerForm.value.name||!providerForm.value.base_url)return;await fetch('/api/proxy/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(providerForm.value)});resetProviderForm();await fetchProxyConfig()}
+function providerInUse(id){return activeMapping.value.provider_id===id&&activeMapping.value.target_model}
+function toggleProvider(p){const mid=lastMappings.value[String(p.id)];if(mid){const m=proxyMappings.value.find(x=>x.id===mid);if(m){enableMapping(m);return}}const last=proxyMappings.value.filter(m=>m.provider_id===p.id).pop();if(last)enableMapping(last)}
+function editMapping(m){mappingForm.value={id:m.id,source_model:'*',target_model:m.target_model,provider_id:m.provider_id,enabled:true}}
+async function saveMapping(){if(!mappingForm.value.target_model||!mappingForm.value.provider_id)return;await fetch('/api/proxy/mappings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...mappingForm.value,source_model:'*',enabled:true})});mappingForm.value={id:null,source_model:'*',target_model:'',provider_id:0,enabled:false};await fetchProxyConfig()}
+async function enableMapping(m){await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_model:m.target_model,provider_id:m.provider_id})});await fetch('/api/proxy/last-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider_id:m.provider_id,mapping_id:m.id})});await fetchProxyConfig()}
+async function deleteProvider(id){if(!confirm('确定删除该提供商？关联的模型映射也会被删除。'))return;await fetch('/api/proxy/providers/'+id,{method:'DELETE'});await fetchProxyConfig()}
+async function deleteMapping(id){if(!confirm('确定删除该模型映射？'))return;await fetch('/api/proxy/mappings/'+id,{method:'DELETE'});await fetchProxyConfig()}
 
 async function fetchModels(){try{const r=await fetch('/api/models'+q({source:sourceFilter.value,profile:profileFilter.value,...timeParams()}));const d=await r.json();const alias={'deepseek-chat':'deepseek-v4-flash'};const merged={};d.models.forEach(function(m){const name=alias[m.name]||m.name;if(merged[name])merged[name].count+=m.count;else merged[name]={name:name,count:m.count}});models.value=Object.values(merged);modelsTotal.value=d.total}catch(e){}}
 const alias={'deepseek-chat':'deepseek-v4-flash'};
@@ -418,7 +524,7 @@ ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
 }
 
 async function refreshCharts(){const d=await fetchTrends();await nextTick();buildCharts(d)}
-async function refreshView(){isRefreshing.value=true;try{await Promise.all([fetchSources(),fetchAgents(),fetchProfiles(),fetchModels(),fetchStats(),fetchLogs(),refreshCharts()]);if(tab.value==='providers')await fetchProviders();lastRefresh.value=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}finally{isRefreshing.value=false}}
+async function refreshView(){isRefreshing.value=true;try{await Promise.all([fetchSources(),fetchAgents(),fetchProfiles(),fetchModels(),fetchStats(),fetchLogs(),refreshCharts(),fetchProxyConfig()]);if(tab.value==='providers')await fetchProviders();lastRefresh.value=new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}finally{isRefreshing.value=false}}
 async function refreshAll(){isRefreshing.value=true;try{await fetch('/api/refresh',{method:'POST'});await refreshView()}finally{isRefreshing.value=false}fetchBalance();fetchDsBalance()}
 function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
 
@@ -429,6 +535,6 @@ watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer
 watch(timezoneFilter,()=>{const nextTz=Number(timezoneFilter.value);currentTime.value=new Date().toLocaleTimeString('zh-CN',{timeZone:tzIana(nextTz),hour:'2-digit',minute:'2-digit',second:'2-digit'});if(timeFilter.value==='custom'){syncPickersToTimezone(prevTimezone,nextTz);refreshView()}prevTimezone=nextTz})
 onUnmounted(()=>{if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);if(fpStart.value)fpStart.value.destroy();if(fpEnd.value)fpEnd.value.destroy()})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,customStart,customEnd,lastRefresh,currentTime,isRefreshing,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings,balance,reLoginMimo,dsBalance,showDsKeyInput,dsKeyInput,saveDsKey,onTimeFilterChange}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,customStart,customEnd,lastRefresh,currentTime,isRefreshing,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings,balance,reLoginMimo,dsBalance,showDsKeyInput,dsKeyInput,saveDsKey,onTimeFilterChange,view,proxyEnabled,proxyStatusSaving,saveProxyStatus,toggleProxyStatus,proxyProviders,proxyMappings,proxyLogs,activeMapping,lastMappings,showProviderForm,showMappingForm,providerForm,mappingForm,resetProviderForm,editProvider,saveProvider,providerInUse,toggleProvider,deleteProvider,editMapping,saveMapping,enableMapping,deleteMapping}
 }}).mount('#app')
 </script></body></html>

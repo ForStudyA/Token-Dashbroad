@@ -5,13 +5,16 @@ Serves token usage data via REST API and the Vue 3 frontend.
 
 from __future__ import annotations
 
+import json
+import time
+import uuid
 import webbrowser
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -25,11 +28,24 @@ from hermes_token_dash.parser_claude import (
     aggregate_by_model_date,
     get_available_models,
     get_time_cutoff,
-    parse_jsonl,
-    scan_claude_jsonls,
 )
-from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
-from hermes_token_dash.parser_hermes import parse_hermes_sessions
+from hermes_token_dash.proxy_db import (
+    get_default_provider,
+    get_active_mapping,
+    set_active_mapping,
+    get_proxy_enabled,
+    delete_provider,
+    delete_mapping,
+    insert_request_log,
+    list_mappings,
+    list_providers,
+    normalize_usage,
+    parse_proxy_request_logs,
+    proxy_log_rows,
+    set_proxy_enabled,
+    upsert_mapping,
+    upsert_provider,
+)
 
 
 
@@ -43,87 +59,8 @@ def _get_user_input_counts(
     agent: str = "",
     model: str = "",
 ) -> dict[str, int]:
-    """Get filtered user-message counts per Hermes model."""
-    import sqlite3
-    from pathlib import Path
-    from datetime import datetime, timedelta, timezone as tz
-
-    if source and source != "hermes":
-        return {}
-
-    counts: dict[str, int] = {}
-    dbs = []
-    main_db = Path.home() / "AppData" / "Local" / "hermes" / "state.db"
-    if main_db.exists():
-        dbs.append(main_db)
-    profiles_dir = Path.home() / "AppData" / "Local" / "hermes" / "profiles"
-    if profiles_dir.is_dir():
-        for profile_dir in profiles_dir.iterdir():
-            if profile_dir.is_dir():
-                db_path = profile_dir / "state.db"
-                if db_path.exists():
-                    dbs.append(db_path)
-
-    user_tz = tz(timedelta(hours=tz_offset))
-    for db_path in dbs:
-        db_profile = "default" if db_path.parent.name == "hermes" else db_path.parent.name
-        if profile and db_profile != profile:
-            continue
-
-        try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-            cur = conn.cursor()
-            conditions = []
-            params: list = []
-
-            if time_filter == "custom":
-                if start:
-                    try:
-                        s = datetime.fromisoformat(start)
-                        if s.tzinfo is None:
-                            s = s.replace(tzinfo=user_tz)
-                        conditions.append("s.started_at >= ?")
-                        params.append(s.timestamp())
-                    except (ValueError, TypeError):
-                        pass
-                if end:
-                    try:
-                        e = datetime.fromisoformat(end)
-                        if e.tzinfo is None:
-                            e = e.replace(tzinfo=user_tz)
-                        conditions.append("s.started_at <= ?")
-                        params.append(e.timestamp())
-                    except (ValueError, TypeError):
-                        pass
-            elif time_filter != "all":
-                from hermes_token_dash.parser_claude import get_time_cutoff
-
-                cutoff = get_time_cutoff(time_filter, tz_offset)
-                conditions.append("s.started_at >= ?")
-                params.append(cutoff.timestamp())
-
-            if model:
-                conditions.append("s.model = ?")
-                params.append(model)
-            if agent:
-                conditions.append("COALESCE(s.source, 'unknown') = ?")
-                params.append(agent.removeprefix("hermes:"))
-
-            extra_conditions = "".join(f" AND {condition}" for condition in conditions)
-            cur.execute(f"""
-                SELECT s.model, COUNT(*) as cnt
-                FROM messages m
-                JOIN sessions s ON m.session_id = s.id
-                WHERE m.role = 'user' AND s.model IS NOT NULL {extra_conditions}
-                GROUP BY s.model
-            """, params)
-            for row in cur.fetchall():
-                counts[row[0]] = counts.get(row[0], 0) + row[1]
-            conn.close()
-        except Exception:
-            pass
-
-    return counts
+    """User input counts are not read from legacy Hermes logs anymore."""
+    return {}
 
 
 app = FastAPI(title="Hermes Token Dashboard")
@@ -168,7 +105,13 @@ def _load_cache() -> list:
     cached records.
     """
     global _cache, _cache_time
-    import os, time
+    records = parse_proxy_request_logs()
+    with _cache_lock:
+        _cache = records
+        _cache_time = time.time()
+    return _cache
+
+    import os
 
     records: list = []
     seen_files: set[str] = set()
@@ -286,9 +229,630 @@ def _apply_time_filter(records: list, time: str, start: str, end: str, tz_offset
     return [r for r in records if r.timestamp >= cutoff]
 
 
+def _record_cost_cny(record) -> float:
+    actual = getattr(record, "total_cost_cny", 0.0) or 0.0
+    if actual > 0:
+        return float(actual)
+    in_price, out_price, cr_price = get_model_price(record.model)
+    return (
+        max(0, record.input_tokens - record.cache_read) / 1_000_000 * in_price
+        + record.cache_read / 1_000_000 * cr_price
+        + record.output_tokens / 1_000_000 * out_price
+        + getattr(record, "reasoning_tokens", 0) / 1_000_000 * out_price
+    )
+
+
 @app.get("/")
 def index():
     return FileResponse(str(STATIC / "index.html"))
+
+
+class ProxyProviderBody(BaseModel):
+    id: int | None = None
+    name: str
+    base_url: str
+    api_key: str = ""
+    enabled: bool = True
+
+
+class ProxyMappingBody(BaseModel):
+    id: int | None = None
+    source_model: str
+    target_model: str
+    provider_id: int
+    enabled: bool = True
+
+
+class ProxyEnabledBody(BaseModel):
+    enabled: bool
+
+
+class ProxyActiveMappingBody(BaseModel):
+    target_model: str
+    provider_id: int
+
+
+def _upstream_chat_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        return base + "/chat/completions"
+    return base + "/v1/chat/completions"
+
+
+def _upstream_models_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        return base + "/models"
+    return base + "/v1/models"
+
+
+def _upstream_model_url(base_url: str, model_id: str) -> str:
+    from urllib.parse import quote
+
+    return _upstream_models_url(base_url).rstrip("/") + "/" + quote(model_id, safe="")
+
+
+def _upstream_show_url(base_url: str) -> str:
+    base = base_url.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return base + "/api/show"
+
+
+def _provider_headers(provider, accept: str = "application/json") -> dict[str, str]:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": accept,
+    }
+    if provider.api_key:
+        headers["Authorization"] = f"Bearer {provider.api_key}"
+    return headers
+
+
+def _model_list_fallback() -> dict[str, Any]:
+    return {
+        "object": "list",
+        "data": [
+            {"id": model, "object": "model", "created": 0, "owned_by": "proxy"}
+            for model in sorted(MODEL_PRICING)
+        ],
+    }
+
+
+def _model_fallback(model_id: str) -> dict[str, Any]:
+    return {
+        "id": model_id,
+        "object": "model",
+        "created": 0,
+        "owned_by": "proxy",
+    }
+
+
+def _show_fallback(model_id: str) -> dict[str, Any]:
+    return {
+        "name": model_id,
+        "model": model_id,
+        "details": {"family": "unknown"},
+        "model_info": {},
+        "capabilities": ["completion", "tools"],
+    }
+
+
+def _upstream_get_json(url: str, provider, fallback: dict[str, Any]) -> Response:
+    import urllib.error
+    import urllib.request
+
+    try:
+        req = urllib.request.Request(
+            url,
+            headers=_provider_headers(provider),
+            method="GET",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return Response(
+                content=resp.read(),
+                status_code=resp.status,
+                media_type=resp.headers.get_content_type() or "application/json",
+            )
+    except (urllib.error.HTTPError, Exception):
+        return JSONResponse(content=fallback)
+
+
+def _upstream_post_json(
+    url: str,
+    provider,
+    body: dict[str, Any],
+    fallback: dict[str, Any],
+) -> Response:
+    import urllib.error
+    import urllib.request
+
+    try:
+        data = json.dumps(body).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers=_provider_headers(provider),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return Response(
+                content=resp.read(),
+                status_code=resp.status,
+                media_type=resp.headers.get_content_type() or "application/json",
+            )
+    except (urllib.error.HTTPError, Exception):
+        return JSONResponse(content=fallback)
+
+
+def _openai_error(message: str, status_code: int = 400) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "error": {
+                "message": message,
+                "type": "proxy_error",
+                "code": status_code,
+            }
+        },
+    )
+
+
+def _extract_usage_from_payload(payload: dict[str, Any]) -> dict[str, Any] | None:
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        return usage
+    return None
+
+
+def _extract_error_text(payload: Any) -> str:
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict):
+            return str(err.get("message") or err)
+        if err:
+            return str(err)
+    return ""
+
+
+@app.get("/api/proxy/providers")
+def api_proxy_providers():
+    return {"providers": list_providers()}
+
+
+@app.post("/api/proxy/providers")
+def api_proxy_save_provider(body: ProxyProviderBody):
+    upsert_provider(
+        name=body.name.strip(),
+        base_url=body.base_url.strip(),
+        api_key=body.api_key.strip(),
+        enabled=body.enabled,
+        provider_id=body.id,
+    )
+    return {"ok": True, "providers": list_providers()}
+
+
+@app.delete("/api/proxy/providers/{provider_id}")
+def api_proxy_delete_provider(provider_id: int):
+    delete_provider(provider_id)
+    return {"ok": True, "providers": list_providers()}
+
+
+@app.get("/api/proxy/mappings")
+def api_proxy_mappings():
+    return {"mappings": list_mappings()}
+
+
+@app.post("/api/proxy/mappings")
+def api_proxy_save_mapping(body: ProxyMappingBody):
+    upsert_mapping(
+        source_model=body.source_model.strip(),
+        target_model=body.target_model.strip(),
+        provider_id=body.provider_id,
+        enabled=body.enabled,
+        mapping_id=body.id,
+    )
+    return {"ok": True, "mappings": list_mappings()}
+
+
+@app.delete("/api/proxy/mappings/{mapping_id}")
+def api_proxy_delete_mapping(mapping_id: int):
+    delete_mapping(mapping_id)
+    return {"ok": True, "mappings": list_mappings()}
+
+
+@app.get("/api/proxy/logs")
+def api_proxy_logs(limit: int = Query(100, ge=1, le=500)):
+    return {"items": proxy_log_rows(limit)}
+
+
+@app.get("/api/proxy/status")
+def api_proxy_status():
+    return {"enabled": get_proxy_enabled()}
+
+
+@app.post("/api/proxy/status")
+def api_proxy_save_status(body: ProxyEnabledBody):
+    set_proxy_enabled(body.enabled)
+    return {"ok": True, "enabled": get_proxy_enabled()}
+
+
+@app.get("/api/proxy/active-mapping")
+def api_proxy_get_active_mapping():
+    return get_active_mapping()
+
+
+@app.post("/api/proxy/active-mapping")
+def api_proxy_set_active_mapping(body: ProxyActiveMappingBody):
+    return {"ok": True, **set_active_mapping(body.target_model, body.provider_id)}
+
+
+@app.get("/api/proxy/last-mappings")
+def api_proxy_last_mappings():
+    """返回所有供应商的上次使用映射 {provider_id: mapping_id}。"""
+    from hermes_token_dash.proxy_db import connect as _connect, get_last_mapping_id
+    result = {}
+    with _connect() as conn:
+        rows = conn.execute("SELECT id FROM proxy_providers").fetchall()
+    for row in rows:
+        mid = get_last_mapping_id(row["id"])
+        if mid:
+            result[str(row["id"])] = mid
+    return {"last_mappings": result}
+
+
+class ProxyLastMappingBody(BaseModel):
+    provider_id: int
+    mapping_id: int
+
+
+@app.post("/api/proxy/last-mapping")
+def api_proxy_set_last_mapping(body: ProxyLastMappingBody):
+    from hermes_token_dash.proxy_db import set_last_mapping_id
+    set_last_mapping_id(body.provider_id, body.mapping_id)
+    return {"ok": True}
+
+
+@app.get("/v1/models")
+@app.get("/api/v1/models")
+def proxy_models():
+    """Hermes-compatible model list passthrough with a local fallback."""
+    if not get_proxy_enabled():
+        return _openai_error("Local proxy is disabled", 503)
+    provider = get_default_provider()
+    if not provider:
+        return _model_list_fallback()
+    return _upstream_get_json(
+        _upstream_models_url(provider.base_url),
+        provider,
+        _model_list_fallback(),
+    )
+
+
+@app.get("/v1/models/{model_id:path}")
+def proxy_model(model_id: str):
+    """Hermes-compatible single-model probe passthrough."""
+    if not get_proxy_enabled():
+        return _openai_error("Local proxy is disabled", 503)
+    provider = get_default_provider()
+    if not provider:
+        return _model_fallback(model_id)
+    return _upstream_get_json(
+        _upstream_model_url(provider.base_url, model_id),
+        provider,
+        _model_fallback(model_id),
+    )
+
+
+@app.post("/api/show")
+async def proxy_api_show(request: Request):
+    """Ollama-style model probe used by Hermes before chat requests."""
+    if not get_proxy_enabled():
+        return _openai_error("Local proxy is disabled", 503)
+    try:
+        body = await request.json()
+        if not isinstance(body, dict):
+            body = {}
+    except Exception:
+        body = {}
+    model_id = str(body.get("name") or body.get("model") or "")
+    provider = get_default_provider()
+    if not provider:
+        return _show_fallback(model_id)
+    return _upstream_post_json(
+        _upstream_show_url(provider.base_url),
+        provider,
+        body,
+        _show_fallback(model_id),
+    )
+
+
+@app.post("/v1/chat/completions")
+async def proxy_chat_completions(request: Request):
+    """OpenAI-compatible chat completions proxy for Hermes."""
+    if not get_proxy_enabled():
+        return _openai_error("Local proxy is disabled", 503)
+    try:
+        body = await request.json()
+    except Exception:
+        return _openai_error("Request body must be JSON", 400)
+
+    request_model = str(body.get("model") or "")
+    provider = get_default_provider()
+    if not provider:
+        return _openai_error("No enabled proxy provider configured", 400)
+
+    # 统一模型映射：从 proxy_settings 读取激活的映射
+    target_model = request_model
+    active = get_active_mapping()
+    if active["target_model"] and active["provider_id"]:
+        target_model = active["target_model"]
+        # 如果映射指定了不同的 provider，使用映射的 provider
+        mapping_provider = get_provider(active["provider_id"])
+        if mapping_provider and mapping_provider.enabled:
+            provider = mapping_provider
+    upstream_body = dict(body)
+    upstream_body["model"] = target_model
+    is_streaming = bool(upstream_body.get("stream"))
+    if is_streaming:
+        stream_options = dict(upstream_body.get("stream_options") or {})
+        stream_options["include_usage"] = True
+        upstream_body["stream_options"] = stream_options
+
+    upstream_url = _upstream_chat_url(provider.base_url)
+    headers = _provider_headers(
+        provider,
+        "text/event-stream" if is_streaming else "application/json",
+    )
+    created_at = int(time.time())
+    start_ts = time.perf_counter()
+
+    if is_streaming:
+        return await _proxy_chat_stream(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+        )
+    return await _proxy_chat_json(
+        upstream_url,
+        headers,
+        upstream_body,
+        provider,
+        request_model,
+        target_model,
+        created_at,
+        start_ts,
+    )
+
+
+async def _proxy_chat_json(
+    upstream_url: str,
+    headers: dict[str, str],
+    upstream_body: dict[str, Any],
+    provider,
+    request_model: str,
+    target_model: str,
+    created_at: int,
+    start_ts: float,
+):
+    import urllib.error
+    import urllib.request
+
+    request_id = str(uuid.uuid4())
+    status_code = 502
+    raw_usage = None
+    error_message = ""
+    content = b""
+    media_type = "application/json"
+
+    try:
+        data = json.dumps(upstream_body).encode("utf-8")
+        req = urllib.request.Request(upstream_url, data=data, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            status_code = resp.status
+            content = resp.read()
+            media_type = resp.headers.get_content_type()
+    except urllib.error.HTTPError as exc:
+        status_code = exc.code
+        content = exc.read()
+        media_type = exc.headers.get_content_type() if exc.headers else "application/json"
+    except Exception as exc:
+        error_message = str(exc)
+        content = json.dumps({"error": {"message": error_message, "type": "proxy_error"}}).encode("utf-8")
+
+    try:
+        payload = json.loads(content.decode("utf-8"))
+        request_id = payload.get("id") or request_id
+        raw_usage = _extract_usage_from_payload(payload)
+        if status_code >= 400 and not error_message:
+            error_message = _extract_error_text(payload)
+    except Exception:
+        if status_code >= 400 and not error_message:
+            error_message = content.decode("utf-8", errors="ignore")[:1000]
+
+    latency_ms = int((time.perf_counter() - start_ts) * 1000)
+    insert_request_log(
+        request_id=request_id,
+        source_app="hermes",
+        provider_id=provider.id,
+        provider_name=provider.name,
+        endpoint="/v1/chat/completions",
+        request_model=request_model,
+        model=target_model,
+        raw_usage=raw_usage,
+        status_code=status_code,
+        error_message=error_message,
+        latency_ms=latency_ms,
+        first_token_ms=latency_ms,
+        is_streaming=False,
+        usage_missing=raw_usage is None,
+        created_at=created_at,
+    )
+    _load_cache()
+    return Response(content=content, status_code=status_code, media_type=media_type)
+
+
+async def _proxy_chat_stream(
+    upstream_url: str,
+    headers: dict[str, str],
+    upstream_body: dict[str, Any],
+    provider,
+    request_model: str,
+    target_model: str,
+    created_at: int,
+    start_ts: float,
+):
+    import urllib.error
+    import urllib.request
+
+    request_id = str(uuid.uuid4())
+    raw_usage = None
+    error_message = ""
+    first_token_ms = 0
+    upstream_resp = None
+
+    try:
+        data = json.dumps(upstream_body).encode("utf-8")
+        req = urllib.request.Request(upstream_url, data=data, headers=headers, method="POST")
+        upstream_resp = urllib.request.urlopen(req, timeout=600)
+    except urllib.error.HTTPError as exc:
+        content = exc.read()
+        error_message = content.decode("utf-8", errors="ignore")[:1000]
+        insert_request_log(
+            request_id=request_id,
+            source_app="hermes",
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint="/v1/chat/completions",
+            request_model=request_model,
+            model=target_model,
+            raw_usage=None,
+            status_code=exc.code,
+            error_message=error_message,
+            latency_ms=int((time.perf_counter() - start_ts) * 1000),
+            first_token_ms=0,
+            is_streaming=True,
+            usage_missing=True,
+            created_at=created_at,
+        )
+        _load_cache()
+        return Response(
+            content=content,
+            status_code=exc.code,
+            media_type=exc.headers.get_content_type() if exc.headers else "application/json",
+        )
+    except Exception as exc:
+        error_message = str(exc)
+        insert_request_log(
+            request_id=request_id,
+            source_app="hermes",
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint="/v1/chat/completions",
+            request_model=request_model,
+            model=target_model,
+            raw_usage=None,
+            status_code=502,
+            error_message=error_message,
+            latency_ms=int((time.perf_counter() - start_ts) * 1000),
+            first_token_ms=0,
+            is_streaming=True,
+            usage_missing=True,
+            created_at=created_at,
+        )
+        _load_cache()
+        return _openai_error(error_message, 502)
+
+    status_code = upstream_resp.status
+
+    def body_iter():
+        nonlocal request_id, raw_usage, error_message, first_token_ms
+        try:
+            while True:
+                chunk = upstream_resp.read(8192)
+                if not chunk:
+                    break
+                if chunk and first_token_ms <= 0:
+                    first_token_ms = int((time.perf_counter() - start_ts) * 1000)
+                _inspect_sse_chunk(chunk, lambda rid: _set_request_id(rid), lambda usage: _set_usage(usage))
+                yield chunk
+        except GeneratorExit:
+            error_message = "client_aborted"
+            raise
+        except Exception as exc:
+            error_message = str(exc)
+            raise
+        finally:
+            latency_ms = int((time.perf_counter() - start_ts) * 1000)
+            try:
+                upstream_resp.close()
+            finally:
+                insert_request_log(
+                    request_id=request_id,
+                    source_app="hermes",
+                    provider_id=provider.id,
+                    provider_name=provider.name,
+                    endpoint="/v1/chat/completions",
+                    request_model=request_model,
+                    model=target_model,
+                    raw_usage=raw_usage,
+                    status_code=499 if error_message == "client_aborted" else status_code,
+                    error_message=error_message,
+                    latency_ms=latency_ms,
+                    first_token_ms=first_token_ms,
+                    is_streaming=True,
+                    usage_missing=raw_usage is None,
+                    created_at=created_at,
+                )
+                _load_cache()
+
+    def _set_request_id(value: str):
+        nonlocal request_id
+        if value:
+            request_id = value
+
+    def _set_usage(value: dict[str, Any]):
+        nonlocal raw_usage
+        raw_usage = value
+
+    return StreamingResponse(
+        body_iter(),
+        status_code=status_code,
+        media_type=upstream_resp.headers.get_content_type() or "text/event-stream",
+    )
+
+
+def _inspect_sse_chunk(
+    chunk: bytes,
+    set_request_id,
+    set_usage,
+) -> None:
+    try:
+        text = chunk.decode("utf-8", errors="ignore")
+    except Exception:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            payload = json.loads(data)
+        except Exception:
+            continue
+        if isinstance(payload, dict):
+            if payload.get("id"):
+                set_request_id(str(payload["id"]))
+            usage = _extract_usage_from_payload(payload)
+            if usage is not None:
+                set_usage(usage)
 
 
 @app.get("/api/sources")
@@ -472,11 +1036,7 @@ def _compute_by_source_summary(records: list, time: str, tz_offset: int = 8) -> 
         d["cache_read"] += r.cache_read
         d["cache_creation"] += r.cache_creation
         d["output"] += getattr(r, "reasoning_tokens", 0)
-        in_price, out_price, cr_price = get_model_price(r.model)
-        d["cost"] += ((max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
-                      + r.cache_read / 1_000_000 * cr_price
-                      + r.output_tokens / 1_000_000 * out_price
-                      + getattr(r, "reasoning_tokens", 0) / 1_000_000 * out_price))
+        d["cost"] += _record_cost_cny(r)
         # Per-model counts within source
         d["models"][r.model] = d["models"].get(r.model, 0) + r.api_call_count
     result = []
@@ -522,11 +1082,7 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
 
     items = []
     for r in page_records:
-        in_price, out_price, cr_price = get_model_price(r.model)
-        cost = round(max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
-                     + r.cache_read / 1_000_000 * cr_price
-                     + r.output_tokens / 1_000_000 * out_price
-                     + getattr(r, "reasoning_tokens", 0) / 1_000_000 * out_price, 6)
+        cost = round(_record_cost_cny(r), 6)
         items.append({
             "request_id": r.request_id,
             "model": r.model,
@@ -541,6 +1097,10 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
             "status_code": r.status_code,
             "latency_ms": r.latency_ms,
             "first_token_ms": r.first_token_ms,
+            "request_model": getattr(r, "request_model", ""),
+            "endpoint": getattr(r, "endpoint", ""),
+            "usage_missing": getattr(r, "usage_missing", False),
+            "is_streaming": getattr(r, "is_streaming", False),
         })
 
     return {"items": items, "total": total, "page": page, "limit": limit}
@@ -629,13 +1189,7 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
             d["success_count"] += r.api_call_count  # 与request_count一致
         if r.latency_ms > 0:
             d["latencies"].append(r.latency_ms)
-        in_price, out_price, cr_price = get_model_price(r.model)
-        d["total_cost"] += (
-            max(0, r.input_tokens - r.cache_read) / 1_000_000 * in_price
-            + r.cache_read / 1_000_000 * cr_price
-            + r.output_tokens / 1_000_000 * out_price
-            + getattr(r, "reasoning_tokens", 0) / 1_000_000 * out_price
-        )
+        d["total_cost"] += _record_cost_cny(r)
 
     result = []
     for p_name, d in prov.items():
