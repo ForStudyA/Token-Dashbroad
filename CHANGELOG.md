@@ -22,3 +22,4 @@
 2026-06-30 | 创建 CHANGELOG.md 和 scripts/check_privacy.py；.gitignore 排除 .temp_prompt.txt 和 dist/
 2026-06-30 | 适配器模式重构：adapters/ 目录，Hermes 适配器改 config.yaml + .env 环境变量，替换 _toggle_hermes_config
 2026-06-30 | fix: Hermes 适配器同时设置 model.base_url（Hermes 实际读取的字段）
+2026-06-30 | refactor: 数据源切换为仅代理数据库，移除文件解析器
