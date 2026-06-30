@@ -222,8 +222,10 @@ class ProxyEnabledBody(BaseModel):
 
 
 class ProxyActiveMappingBody(BaseModel):
-    target_model: str
-    provider_id: int
+    mode: str = "mapping"
+    target_model: str = ""
+    provider_id: int = 0
+    mapping_id: int = 0
 
 
 PROXY_URL = "http://127.0.0.1:8765/v1"
@@ -342,18 +344,22 @@ def _select_chat_provider(request_model: str, auth_header: str):
     if _is_mimo_model(request_model):
         return request_model, _mimo_provider_from_request(auth_header)
 
-    provider = get_default_provider()
-    if not provider:
+    active = get_active_mapping()
+    mode = active.get("mode") or ("mapping" if active.get("target_model") else "")
+    provider_id = int(active.get("provider_id") or 0)
+    if not mode or not provider_id:
         return request_model, None
 
-    target_model = request_model
-    active = get_active_mapping()
-    if active["target_model"] and active["provider_id"]:
-        target_model = active["target_model"]
-        mapping_provider = get_provider(active["provider_id"])
-        if mapping_provider and mapping_provider.enabled:
-            provider = mapping_provider
-    return target_model, provider
+    provider = get_provider(provider_id)
+    if not provider:
+        return request_model, None
+    provider = _provider_with_request_auth(provider, auth_header)
+
+    if mode == "passthrough":
+        return request_model, provider
+    if mode == "mapping" and active.get("target_model"):
+        return str(active["target_model"]), provider
+    return request_model, None
 
 
 def _model_list_fallback() -> dict[str, Any]:
@@ -432,6 +438,90 @@ def _upstream_post_json(
         return JSONResponse(content=fallback)
 
 
+def _read_upstream_json(url: str, provider, method: str = "GET", body: dict[str, Any] | None = None) -> tuple[int, Any, str]:
+    import urllib.error
+    import urllib.request
+
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    try:
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers=_provider_headers(provider),
+            method=method,
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            raw = resp.read()
+            text = raw.decode("utf-8", errors="ignore")
+            try:
+                return resp.status, json.loads(text), ""
+            except Exception:
+                return resp.status, text, ""
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        text = raw.decode("utf-8", errors="ignore")
+        try:
+            payload: Any = json.loads(text)
+        except Exception:
+            payload = text
+        return exc.code, payload, _extract_error_text(payload) or text[:500]
+    except Exception as exc:
+        return 0, None, str(exc)
+
+
+def _extract_model_ids(payload: Any) -> list[str]:
+    values: list[str] = []
+    items: Any = []
+    if isinstance(payload, dict):
+        if isinstance(payload.get("data"), list):
+            items = payload["data"]
+        elif isinstance(payload.get("models"), list):
+            items = payload["models"]
+    elif isinstance(payload, list):
+        items = payload
+    for item in items:
+        value = ""
+        if isinstance(item, str):
+            value = item
+        elif isinstance(item, dict):
+            value = str(item.get("id") or item.get("name") or item.get("model") or "")
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def _get_active_provider_for_metadata():
+    active = get_active_mapping()
+    provider_id = int(active.get("provider_id") or 0)
+    return get_provider(provider_id) if provider_id else None
+
+
+def _normalize_chat_request_body(body: dict[str, Any], target_model: str) -> dict[str, Any]:
+    """Normalize common OpenAI-ish request variants before upstream forwarding."""
+    upstream_body = dict(body)
+    upstream_body["model"] = target_model
+
+    if "messages" not in upstream_body:
+        text = upstream_body.get("input") or upstream_body.get("prompt")
+        if isinstance(text, str) and text:
+            messages = []
+            instructions = upstream_body.get("instructions")
+            if isinstance(instructions, str) and instructions:
+                messages.append({"role": "system", "content": instructions})
+            messages.append({"role": "user", "content": text})
+            upstream_body["messages"] = messages
+        elif isinstance(text, list):
+            upstream_body["messages"] = text
+
+    if "max_output_tokens" in upstream_body and "max_tokens" not in upstream_body:
+        upstream_body["max_tokens"] = upstream_body.pop("max_output_tokens")
+
+    upstream_body.pop("input", None)
+    upstream_body.pop("prompt", None)
+    upstream_body.pop("instructions", None)
+    return upstream_body
+
+
 def _openai_error(message: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -490,6 +580,38 @@ def api_proxy_toggle_provider(provider_id: int):
     return toggle_provider(provider_id)
 
 
+@app.post("/api/proxy/providers/{provider_id}/test")
+def api_proxy_test_provider(provider_id: int):
+    provider = get_provider(provider_id)
+    if not provider:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Provider not found"})
+    status_code, payload, error = _read_upstream_json(_upstream_models_url(provider.base_url), provider)
+    models = _extract_model_ids(payload)
+    ok = 200 <= status_code < 300
+    return {
+        "ok": ok,
+        "status_code": status_code,
+        "message": "连接成功，API Key 可用" if ok else (error or "连接失败"),
+        "models": models,
+        "model_count": len(models),
+    }
+
+
+@app.get("/api/proxy/providers/{provider_id}/models")
+def api_proxy_provider_models(provider_id: int):
+    provider = get_provider(provider_id)
+    if not provider:
+        return JSONResponse(status_code=404, content={"ok": False, "error": "Provider not found", "models": []})
+    status_code, payload, error = _read_upstream_json(_upstream_models_url(provider.base_url), provider)
+    models = _extract_model_ids(payload)
+    return {
+        "ok": 200 <= status_code < 300,
+        "status_code": status_code,
+        "error": error,
+        "models": models,
+    }
+
+
 @app.get("/api/proxy/mappings")
 def api_proxy_mappings():
     return {"mappings": list_mappings()}
@@ -543,7 +665,15 @@ def api_proxy_get_active_mapping():
 
 @app.post("/api/proxy/active-mapping")
 def api_proxy_set_active_mapping(body: ProxyActiveMappingBody):
-    return {"ok": True, **set_active_mapping(body.target_model, body.provider_id)}
+    return {
+        "ok": True,
+        **set_active_mapping(
+            target_model=body.target_model,
+            provider_id=body.provider_id,
+            mode=body.mode,
+            mapping_id=body.mapping_id,
+        ),
+    }
 
 
 @app.get("/api/proxy/last-mappings")
@@ -578,6 +708,9 @@ def proxy_models():
     """Hermes-compatible model list passthrough with a local fallback."""
     if not get_proxy_enabled():
         return _openai_error("Local proxy is disabled", 503)
+    provider = _get_active_provider_for_metadata()
+    if provider:
+        return _upstream_get_json(_upstream_models_url(provider.base_url), provider, _model_list_fallback())
     return _model_list_fallback()
 
 
@@ -586,6 +719,9 @@ def proxy_model(model_id: str):
     """Hermes-compatible single-model probe passthrough."""
     if not get_proxy_enabled():
         return _openai_error("Local proxy is disabled", 503)
+    provider = _get_active_provider_for_metadata()
+    if provider:
+        return _upstream_get_json(_upstream_model_url(provider.base_url, model_id), provider, _model_fallback(model_id))
     return _model_fallback(model_id)
 
 
@@ -601,6 +737,9 @@ async def proxy_api_show(request: Request):
     except Exception:
         body = {}
     model_id = str(body.get("name") or body.get("model") or "")
+    provider = _get_active_provider_for_metadata()
+    if provider:
+        return _upstream_post_json(_upstream_show_url(provider.base_url), provider, body, _show_fallback(model_id))
     return _show_fallback(model_id)
 
 
@@ -620,8 +759,7 @@ async def proxy_chat_completions(request: Request):
     if not provider:
         return _openai_error("No enabled proxy provider configured", 400)
 
-    upstream_body = dict(body)
-    upstream_body["model"] = target_model
+    upstream_body = _normalize_chat_request_body(body, target_model)
     is_streaming = bool(upstream_body.get("stream"))
     if is_streaming:
         stream_options = dict(upstream_body.get("stream_options") or {})

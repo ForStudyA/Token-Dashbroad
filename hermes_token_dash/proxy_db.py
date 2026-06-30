@@ -158,7 +158,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
                 if not exists:
                     ts = now_epoch()
                     conn.execute(
-                        "INSERT INTO model_mappings (source_model, target_model, provider_id, enabled, protected, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)",
+                        "INSERT INTO model_mappings (source_model, target_model, provider_id, enabled, protected, created_at, updated_at) VALUES (?, ?, ?, 0, 1, ?, ?)",
                         ("*", "*", default_p["id"], ts, ts),
                     )
         except Exception:
@@ -270,16 +270,190 @@ def set_default_model(model: str) -> dict[str, Any]:
 
 
 def get_active_mapping() -> dict[str, Any]:
-    """返回当前激活的映射 {target_model, provider_id}。"""
+    """Return the single active proxy configuration.
+
+    ``mode`` is one of ``mapping``, ``passthrough``, or ``""``.  Legacy
+    ``active_model``/``active_provider_id`` settings are still understood so
+    existing installs do not lose their selected mapping after upgrade.
+    """
+    mode = _get_setting("active_proxy_mode")
+    mapping_id = _get_setting("active_mapping_id")
     model = _get_setting("active_model")
     pid = _get_setting("active_provider_id")
-    return {"target_model": model, "provider_id": int(pid) if pid else 0}
+    result = {
+        "mode": mode,
+        "target_model": model,
+        "provider_id": int(pid) if pid else 0,
+        "mapping_id": int(mapping_id) if mapping_id else 0,
+    }
+
+    if result["mode"] == "mapping" and result["mapping_id"]:
+        with closing(connect()) as conn:
+            row = conn.execute(
+                """
+                SELECT id, target_model, provider_id
+                  FROM model_mappings
+                 WHERE id = ? AND protected = 0
+                 LIMIT 1
+                """,
+                (result["mapping_id"],),
+            ).fetchone()
+        if row:
+            result.update(
+                {
+                    "target_model": row["target_model"],
+                    "provider_id": int(row["provider_id"]),
+                    "mapping_id": int(row["id"]),
+                }
+            )
+            return result
+        return _clear_active_proxy()
+
+    if result["mode"] == "passthrough":
+        if result["provider_id"] and get_provider(result["provider_id"]):
+            result["target_model"] = ""
+            result["mapping_id"] = 0
+            return result
+        return _clear_active_proxy()
+
+    if result["target_model"] and result["provider_id"]:
+        # Legacy active mapping.  Try to attach the matching mapping row.
+        with closing(connect()) as conn:
+            row = conn.execute(
+                """
+                SELECT id
+                  FROM model_mappings
+                 WHERE target_model = ? AND provider_id = ? AND protected = 0
+                 ORDER BY id DESC
+                 LIMIT 1
+                """,
+                (result["target_model"], result["provider_id"]),
+            ).fetchone()
+        result["mode"] = "mapping"
+        result["mapping_id"] = int(row["id"]) if row else 0
+        return result
+
+    with closing(connect()) as conn:
+        row = conn.execute(
+            """
+            SELECT provider_id
+              FROM model_mappings
+             WHERE protected = 1 AND enabled = 1
+             ORDER BY id
+             LIMIT 1
+            """
+        ).fetchone()
+    if row and get_provider(int(row["provider_id"])):
+        return {
+            "mode": "passthrough",
+            "target_model": "",
+            "provider_id": int(row["provider_id"]),
+            "mapping_id": 0,
+        }
+
+    result["mode"] = ""
+    result["target_model"] = ""
+    result["provider_id"] = 0
+    result["mapping_id"] = 0
+    return result
 
 
-def set_active_mapping(target_model: str, provider_id: int) -> dict[str, Any]:
+def _write_active_proxy(
+    mode: str,
+    provider_id: int = 0,
+    mapping_id: int = 0,
+    target_model: str = "",
+) -> dict[str, Any]:
+    _set_setting("active_proxy_mode", mode)
+    _set_setting("active_provider_id", str(provider_id) if provider_id else "")
+    _set_setting("active_mapping_id", str(mapping_id) if mapping_id else "")
     _set_setting("active_model", target_model.strip())
-    _set_setting("active_provider_id", str(provider_id))
-    return {"target_model": target_model.strip(), "provider_id": provider_id}
+    return {
+        "mode": mode,
+        "target_model": target_model.strip(),
+        "provider_id": provider_id,
+        "mapping_id": mapping_id,
+    }
+
+
+def _clear_active_proxy() -> dict[str, Any]:
+    with closing(connect()) as conn:
+        conn.execute("UPDATE model_mappings SET enabled = 0")
+        conn.commit()
+    return _write_active_proxy("")
+
+
+def set_active_mapping(
+    target_model: str = "",
+    provider_id: int = 0,
+    mode: str = "mapping",
+    mapping_id: int = 0,
+) -> dict[str, Any]:
+    """Set the single active proxy.
+
+    ``mapping`` mode activates one model mapping.  ``passthrough`` mode keeps
+    the request model unchanged and routes to ``provider_id``.  Empty mode
+    disables all concrete proxy routes.
+    """
+    mode = (mode or "").strip()
+    target_model = target_model.strip()
+    provider_id = int(provider_id or 0)
+    mapping_id = int(mapping_id or 0)
+
+    with closing(connect()) as conn:
+        conn.execute("UPDATE model_mappings SET enabled = 0")
+        if not mode:
+            conn.commit()
+            return _write_active_proxy("")
+
+        if mode == "passthrough":
+            provider = conn.execute(
+                "SELECT id FROM proxy_providers WHERE id = ?", (provider_id,)
+            ).fetchone()
+            if not provider:
+                conn.commit()
+                return _write_active_proxy("")
+            conn.commit()
+            return _write_active_proxy("passthrough", provider_id=provider_id)
+
+        if mode == "mapping":
+            if mapping_id:
+                row = conn.execute(
+                    """
+                    SELECT id, target_model, provider_id
+                      FROM model_mappings
+                     WHERE id = ? AND protected = 0
+                     LIMIT 1
+                    """,
+                    (mapping_id,),
+                ).fetchone()
+            else:
+                row = conn.execute(
+                    """
+                    SELECT id, target_model, provider_id
+                      FROM model_mappings
+                     WHERE target_model = ? AND provider_id = ? AND protected = 0
+                     ORDER BY id DESC
+                     LIMIT 1
+                    """,
+                    (target_model, provider_id),
+                ).fetchone()
+            if not row:
+                conn.commit()
+                return _write_active_proxy("")
+            conn.execute(
+                "UPDATE model_mappings SET enabled = 1, updated_at = ? WHERE id = ?",
+                (now_epoch(), row["id"]),
+            )
+            conn.commit()
+            return _write_active_proxy(
+                "mapping",
+                provider_id=int(row["provider_id"]),
+                mapping_id=int(row["id"]),
+                target_model=row["target_model"],
+            )
+
+    return _write_active_proxy("")
 
 
 def upsert_provider(
@@ -340,7 +514,7 @@ def get_provider_by_name(name: str) -> ProviderConfig | None:
             """
             SELECT id, name, base_url, api_key, enabled
               FROM proxy_providers
-             WHERE lower(name) = lower(?) AND enabled = 1
+             WHERE lower(name) = lower(?)
              LIMIT 1
             """,
             (name,),
@@ -373,10 +547,13 @@ def _provider_from_row(row: sqlite3.Row) -> ProviderConfig:
 
 
 def delete_provider(provider_id: int) -> dict[str, Any]:
+    active = get_active_mapping()
     with closing(connect()) as conn:
         conn.execute("DELETE FROM model_mappings WHERE provider_id = ?", (provider_id,))
         conn.execute("DELETE FROM proxy_providers WHERE id = ?", (provider_id,))
         conn.commit()
+    if active["provider_id"] == provider_id:
+        _clear_active_proxy()
     return {"ok": True}
 
 
@@ -393,24 +570,35 @@ def toggle_provider(provider_id: int) -> dict[str, Any]:
 
 
 def toggle_mapping(mapping_id: int) -> dict[str, Any]:
-    ts = now_epoch()
+    row = None
     with closing(connect()) as conn:
-        row = conn.execute("SELECT enabled FROM model_mappings WHERE id = ?", (mapping_id,)).fetchone()
-        if not row:
-            return {"ok": False, "error": "Mapping not found"}
-        new_val = 0 if row["enabled"] else 1
-        conn.execute("UPDATE model_mappings SET enabled = ?, updated_at = ? WHERE id = ?", (new_val, ts, mapping_id))
-        conn.commit()
-    return {"ok": True, "enabled": bool(new_val)}
+        row = conn.execute(
+            """
+            SELECT id, target_model, provider_id, enabled, protected
+              FROM model_mappings
+             WHERE id = ?
+            """,
+            (mapping_id,),
+        ).fetchone()
+    if not row:
+        return {"ok": False, "error": "Mapping not found"}
+    if row["protected"]:
+        return set_active_mapping(mode="passthrough", provider_id=int(row["provider_id"]))
+    if row["enabled"]:
+        return {"ok": True, **_clear_active_proxy()}
+    return {"ok": True, **set_active_mapping(mode="mapping", mapping_id=int(row["id"]))}
 
 
 def delete_mapping(mapping_id: int) -> dict[str, Any]:
+    active = get_active_mapping()
     with closing(connect()) as conn:
         row = conn.execute("SELECT protected FROM model_mappings WHERE id = ?", (mapping_id,)).fetchone()
         if row and row["protected"]:
             return {"ok": False, "error": "Cannot delete protected mapping"}
         conn.execute("DELETE FROM model_mappings WHERE id = ?", (mapping_id,))
         conn.commit()
+    if active["mapping_id"] == mapping_id:
+        _clear_active_proxy()
     return {"ok": True}
 
 
@@ -444,6 +632,10 @@ def upsert_mapping(
     ts = now_epoch()
     with closing(connect()) as conn:
         if mapping_id:
+            old = conn.execute(
+                "SELECT enabled FROM model_mappings WHERE id = ?", (mapping_id,)
+            ).fetchone()
+            current_enabled = int(old["enabled"]) if old else 0
             conn.execute(
                 """
                 UPDATE model_mappings
@@ -451,7 +643,7 @@ def upsert_mapping(
                        enabled = ?, updated_at = ?
                  WHERE id = ?
                 """,
-                (source_model, target_model, provider_id, int(enabled), ts, mapping_id),
+                (source_model, target_model, provider_id, current_enabled, ts, mapping_id),
             )
         else:
             conn.execute(
@@ -460,36 +652,24 @@ def upsert_mapping(
                     (source_model, target_model, provider_id, enabled, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (source_model, target_model, provider_id, int(enabled), ts, ts),
+                (source_model, target_model, provider_id, 0, ts, ts),
             )
         conn.commit()
     return {"ok": True}
 
 
 def resolve_mapping(request_model: str) -> tuple[str, ProviderConfig] | None:
-    with closing(connect()) as conn:
-        row = conn.execute(
-            """
-            SELECT m.target_model, p.id, p.name, p.base_url, p.api_key, p.enabled
-              FROM model_mappings m
-              JOIN proxy_providers p ON p.id = m.provider_id
-             WHERE m.source_model = ? AND m.enabled = 1 AND p.enabled = 1
-             LIMIT 1
-            """,
-            (request_model,),
-        ).fetchone()
-    if row:
-        provider = ProviderConfig(
-            id=int(row["id"]),
-            name=row["name"],
-            base_url=row["base_url"],
-            api_key=row["api_key"],
-            enabled=bool(row["enabled"]),
-        )
-        return row["target_model"], provider
-    provider = get_default_provider()
-    if provider:
+    active = get_active_mapping()
+    provider_id = int(active.get("provider_id") or 0)
+    if not active.get("mode") or not provider_id:
+        return None
+    provider = get_provider(provider_id)
+    if not provider:
+        return None
+    if active["mode"] == "passthrough":
         return request_model, provider
+    if active["mode"] == "mapping" and active.get("target_model"):
+        return str(active["target_model"]), provider
     return None
 
 

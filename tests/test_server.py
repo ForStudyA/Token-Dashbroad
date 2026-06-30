@@ -475,8 +475,12 @@ class TestHermesProxyPassthrough:
             )
             return JSONResponse({"ok": True})
 
-        monkeypatch.setattr(srv, "get_default_provider", lambda: provider)
-        monkeypatch.setattr(srv, "get_active_mapping", lambda: {"target_model": "", "provider_id": 0})
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 1 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "passthrough", "target_model": "", "provider_id": 1, "mapping_id": 0},
+        )
         monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
 
         resp = client.post(
@@ -491,6 +495,286 @@ class TestHermesProxyPassthrough:
         assert captured["request_model"] == "hermes-config-model"
         assert captured["target_model"] == "hermes-config-model"
         assert captured["provider"] is provider
+
+    def test_chat_completion_requires_active_proxy(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "", "target_model": "", "provider_id": 0, "mapping_id": 0},
+        )
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "hermes-config-model", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 400
+        assert "No enabled proxy provider configured" in resp.text
+
+    def test_chat_completion_uses_active_mapping(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=2,
+            name="mapped",
+            base_url="http://mapped.test/v1",
+            api_key="mapped-key",
+            enabled=True,
+        )
+        captured = {}
+
+        async def fake_proxy_chat_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+        ):
+            captured.update(
+                {
+                    "upstream_url": upstream_url,
+                    "headers": headers,
+                    "upstream_body": upstream_body,
+                    "provider": provider_arg,
+                    "request_model": request_model,
+                    "target_model": target_model,
+                }
+            )
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 2 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {
+                "mode": "mapping",
+                "target_model": "upstream-model",
+                "provider_id": 2,
+                "mapping_id": 9,
+            },
+        )
+        monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "hermes-config-model", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 200
+        assert captured["upstream_url"] == "http://mapped.test/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer mapped-key"
+        assert captured["upstream_body"]["model"] == "upstream-model"
+        assert captured["request_model"] == "hermes-config-model"
+        assert captured["target_model"] == "upstream-model"
+        assert captured["provider"] is provider
+
+    def test_chat_completion_normalizes_responses_style_body(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=2,
+            name="mapped",
+            base_url="http://mapped.test/v1",
+            api_key="mapped-key",
+            enabled=True,
+        )
+        captured = {}
+
+        async def fake_proxy_chat_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+        ):
+            captured["upstream_body"] = upstream_body
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 2 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "mapping", "target_model": "upstream-model", "provider_id": 2, "mapping_id": 9},
+        )
+        monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "request-model",
+                "instructions": "Be brief.",
+                "input": "Hello",
+                "max_output_tokens": 33,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert captured["upstream_body"]["model"] == "upstream-model"
+        assert captured["upstream_body"]["messages"] == [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "Hello"},
+        ]
+        assert captured["upstream_body"]["max_tokens"] == 33
+        assert "input" not in captured["upstream_body"]
+        assert "instructions" not in captured["upstream_body"]
+
+    def test_provider_test_endpoint_reports_models(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=7,
+            name="provider",
+            base_url="http://provider.test/v1",
+            api_key="key",
+            enabled=True,
+        )
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 7 else None)
+        monkeypatch.setattr(
+            srv,
+            "_read_upstream_json",
+            lambda url, provider, method="GET", body=None: (
+                200,
+                {"data": [{"id": "model-a"}, {"id": "model-b"}]},
+                "",
+            ),
+        )
+
+        resp = client.post("/api/proxy/providers/7/test")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is True
+        assert data["models"] == ["model-a", "model-b"]
+        assert data["model_count"] == 2
+
+    def test_active_models_endpoint_uses_active_provider(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=7,
+            name="provider",
+            base_url="http://provider.test/v1",
+            api_key="key",
+            enabled=True,
+        )
+        captured = {}
+
+        def fake_upstream_get_json(url, provider_arg, fallback):
+            captured["url"] = url
+            captured["provider"] = provider_arg
+            return JSONResponse({"data": [{"id": "model-a"}]})
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 7 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "passthrough", "target_model": "", "provider_id": 7, "mapping_id": 0},
+        )
+        monkeypatch.setattr(srv, "_upstream_get_json", fake_upstream_get_json)
+
+        resp = client.get("/v1/models")
+
+        assert resp.status_code == 200
+        assert captured["url"] == "http://provider.test/v1/models"
+        assert captured["provider"] is provider
+        assert resp.json()["data"][0]["id"] == "model-a"
+
+    def test_active_proxy_api_is_exclusive(self, monkeypatch, tmp_path, client):
+        from hermes_token_dash import proxy_db as pdb
+
+        data_dir = tmp_path / "token-dashboard"
+        monkeypatch.setattr(pdb, "DATA_DIR", data_dir)
+        monkeypatch.setattr(pdb, "DB_PATH", data_dir / "token-dashboard.db")
+
+        client.post(
+            "/api/proxy/providers",
+            json={"name": "p1", "base_url": "http://p1.test", "api_key": "k1", "enabled": True},
+        )
+        client.post(
+            "/api/proxy/providers",
+            json={"name": "p2", "base_url": "http://p2.test", "api_key": "k2", "enabled": True},
+        )
+        providers = client.get("/api/proxy/providers").json()["providers"]
+        provider_ids = {p["name"]: p["id"] for p in providers}
+
+        client.post(
+            "/api/proxy/mappings",
+            json={
+                "source_model": "*",
+                "target_model": "model-a",
+                "provider_id": provider_ids["p1"],
+                "enabled": True,
+            },
+        )
+        mapping_a = next(
+            m for m in client.get("/api/proxy/mappings").json()["mappings"]
+            if m["target_model"] == "model-a"
+        )
+        active = client.get("/api/proxy/active-mapping").json()
+        assert active["mode"] == ""
+
+        client.post(
+            "/api/proxy/mappings",
+            json={
+                "source_model": "*",
+                "target_model": "model-b",
+                "provider_id": provider_ids["p2"],
+                "enabled": True,
+            },
+        )
+        mappings = client.get("/api/proxy/mappings").json()["mappings"]
+        mapping_b = next(m for m in mappings if m["target_model"] == "model-b")
+        active = client.get("/api/proxy/active-mapping").json()
+
+        assert active["mode"] == ""
+        assert not [m for m in mappings if m["enabled"] and not m["protected"]]
+
+        client.post(
+            "/api/proxy/active-mapping",
+            json={"mode": "mapping", "mapping_id": mapping_a["id"]},
+        )
+        mappings = client.get("/api/proxy/mappings").json()["mappings"]
+        active = client.get("/api/proxy/active-mapping").json()
+        assert active["mapping_id"] == mapping_a["id"]
+        assert [m["id"] for m in mappings if m["enabled"] and not m["protected"]] == [mapping_a["id"]]
+
+        client.post(
+            "/api/proxy/active-mapping",
+            json={"mode": "mapping", "mapping_id": mapping_b["id"]},
+        )
+        mappings = client.get("/api/proxy/mappings").json()["mappings"]
+        active = client.get("/api/proxy/active-mapping").json()
+        assert active["mode"] == "mapping"
+        assert active["mapping_id"] == mapping_b["id"]
+        assert active["provider_id"] == provider_ids["p2"]
+        assert [m["id"] for m in mappings if m["enabled"] and not m["protected"]] == [mapping_b["id"]]
+
+        client.post(
+            "/api/proxy/active-mapping",
+            json={"mode": "passthrough", "provider_id": provider_ids["p1"]},
+        )
+        mappings = client.get("/api/proxy/mappings").json()["mappings"]
+        active = client.get("/api/proxy/active-mapping").json()
+        assert active["mode"] == "passthrough"
+        assert active["provider_id"] == provider_ids["p1"]
+        assert not [m for m in mappings if m["enabled"] and not m["protected"]]
+
+        client.delete(f"/api/proxy/providers/{provider_ids['p1']}")
+        active = client.get("/api/proxy/active-mapping").json()
+        assert active["mode"] == ""
+        assert active["provider_id"] == 0
 
     def test_mimo_model_bypasses_ds_mapping(self, monkeypatch, client):
         """Mimo models route to Xiaomi even when a DS mapping is active."""
