@@ -207,6 +207,10 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 
 <div class="body" v-show="view==='dashboard'">
 <div class="sidebar">
+<div class="slabel">模型</div>
+<div class="mitem" :class="{active:activeModel===''}" @click="activeModel='';refreshView()"><span>全部</span><span class="cnt">{{modelsTotal}}</span></div>
+<div class="mitem" v-for="m in models" :class="{active:activeModel===m.name}" @click="activeModel=m.name;refreshView()"><span class="trunc">{{m.name}}</span><span class="cnt">{{m.count}}</span></div>
+
 <div class="scard"><div class="slabel">汇总</div>
 <div class="srow"><span class="l">总token消耗</span><span class="v">{{fmt(summary.input+summary.output)}}</span></div>
 <div class="srow"><span class="l">输入</span><span class="v">{{fmt(summary.input)}}</span></div>
