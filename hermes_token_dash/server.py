@@ -32,6 +32,7 @@ from hermes_token_dash.parser_claude import (
 from hermes_token_dash.proxy_db import (
     get_default_provider,
     get_provider,
+    get_provider_by_name,
     get_active_mapping,
     set_active_mapping,
     get_proxy_enabled,
@@ -48,6 +49,25 @@ from hermes_token_dash.proxy_db import (
     upsert_provider,
 )
 
+
+class RuntimeProxyProvider:
+    """Provider settings resolved at request time."""
+
+    def __init__(
+        self,
+        id: int | None,
+        name: str,
+        base_url: str,
+        api_key: str = "",
+        enabled: bool = True,
+        auth_header: str = "",
+    ) -> None:
+        self.id = id
+        self.name = name
+        self.base_url = base_url
+        self.api_key = api_key
+        self.enabled = enabled
+        self.auth_header = auth_header
 
 
 def _get_user_input_counts(
@@ -99,7 +119,7 @@ _file_cache: dict[str, tuple[float, int, list]] = {}
 
 
 def _load_cache() -> list:
-    """Load records from proxy database only."""
+    """Load usage records from the proxy database."""
     global _cache, _cache_time
 
     records: list = parse_proxy_request_logs()
@@ -272,9 +292,66 @@ def _provider_headers(provider, accept: str = "application/json") -> dict[str, s
         "Content-Type": "application/json",
         "Accept": accept,
     }
-    if provider.api_key:
+    auth_header = getattr(provider, "auth_header", "")
+    if auth_header:
+        headers["Authorization"] = auth_header
+    elif provider.api_key:
         headers["Authorization"] = f"Bearer {provider.api_key}"
     return headers
+
+
+def _request_auth_header(request: Request) -> str:
+    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    return auth.strip()
+
+
+def _is_mimo_model(model: str) -> bool:
+    value = (model or "").lower()
+    return value.startswith("mimo-") or "/mimo-" in value or "xiaomi/mimo" in value
+
+
+def _provider_with_request_auth(provider, auth_header: str):
+    if not auth_header:
+        return provider
+    return RuntimeProxyProvider(
+        id=provider.id,
+        name=provider.name,
+        base_url=provider.base_url,
+        api_key=provider.api_key,
+        enabled=provider.enabled,
+        auth_header=auth_header,
+    )
+
+
+def _mimo_provider_from_request(auth_header: str):
+    provider = get_provider_by_name("mimo") or get_provider_by_name("xiaomi")
+    if provider:
+        return _provider_with_request_auth(provider, auth_header)
+    return RuntimeProxyProvider(
+        id=None,
+        name="mimo",
+        base_url="https://api.xiaomimimo.com/v1",
+        auth_header=auth_header,
+    )
+
+
+def _select_chat_provider(request_model: str, auth_header: str):
+    """Resolve the upstream provider/model for an incoming chat request."""
+    if _is_mimo_model(request_model):
+        return request_model, _mimo_provider_from_request(auth_header)
+
+    provider = get_default_provider()
+    if not provider:
+        return request_model, None
+
+    target_model = request_model
+    active = get_active_mapping()
+    if active["target_model"] and active["provider_id"]:
+        target_model = active["target_model"]
+        mapping_provider = get_provider(active["provider_id"])
+        if mapping_provider and mapping_provider.enabled:
+            provider = mapping_provider
+    return target_model, provider
 
 
 def _model_list_fallback() -> dict[str, Any]:
@@ -548,7 +625,8 @@ async def proxy_chat_completions(request: Request):
         return _openai_error("Request body must be JSON", 400)
 
     request_model = str(body.get("model") or "")
-    provider = get_default_provider()
+    auth_header = _request_auth_header(request)
+    target_model, provider = _select_chat_provider(request_model, auth_header)
     if not provider:
         return _openai_error("No enabled proxy provider configured", 400)
 
@@ -561,6 +639,7 @@ async def proxy_chat_completions(request: Request):
         mapping_provider = get_provider(active["provider_id"])
         if mapping_provider and mapping_provider.enabled:
             provider = mapping_provider
+    target_model, provider = _select_chat_provider(request_model, auth_header)
     upstream_body = dict(body)
     upstream_body["model"] = target_model
     is_streaming = bool(upstream_body.get("stream"))

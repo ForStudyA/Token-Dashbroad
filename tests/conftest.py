@@ -129,6 +129,18 @@ def _mock_parse_hermes_sessions() -> list[TokenUsage]:
     return []
 
 
+def _mock_scan_codex_jsonls() -> list[Path]:
+    return []
+
+
+def _mock_parse_codex_jsonl(_file: Path) -> list[TokenUsage]:
+    return []
+
+
+def _mock_parse_proxy_request_logs() -> list[TokenUsage]:
+    return list(SAMPLE_USAGES)
+
+
 def _mock_aggregate_by_model_date(
     records: list[TokenUsage], time_filter: str = "all", tz_offset: int = 8
 ) -> list[ModelStats]:
@@ -155,9 +167,7 @@ def _mock_parsers(monkeypatch):
     """自动 mock 所有 parser 层函数。在 server 模块级别替换。"""
     from hermes_token_dash import server as srv
 
-    monkeypatch.setattr(srv, "scan_claude_jsonls", _mock_scan_claude_jsonls)
-    monkeypatch.setattr(srv, "parse_jsonl", _mock_parse_jsonl)
-    monkeypatch.setattr(srv, "parse_hermes_sessions", _mock_parse_hermes_sessions)
+    monkeypatch.setattr(srv, "parse_proxy_request_logs", _mock_parse_proxy_request_logs)
     monkeypatch.setattr(
         srv, "aggregate_by_model_date", _mock_aggregate_by_model_date
     )

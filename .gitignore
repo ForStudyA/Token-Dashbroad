@@ -39,5 +39,8 @@ build/
 # Temp prompt (historical artifact, not a real file source)
 .temp_prompt.txt
 
+# Codex temporary files
+.codex_tmp/
+
 # pip output
 =5.0

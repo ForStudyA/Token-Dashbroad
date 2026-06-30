@@ -313,6 +313,20 @@ def get_provider(provider_id: int) -> ProviderConfig | None:
     return _provider_from_row(row) if row else None
 
 
+def get_provider_by_name(name: str) -> ProviderConfig | None:
+    with closing(connect()) as conn:
+        row = conn.execute(
+            """
+            SELECT id, name, base_url, api_key, enabled
+              FROM proxy_providers
+             WHERE lower(name) = lower(?) AND enabled = 1
+             LIMIT 1
+            """,
+            (name,),
+        ).fetchone()
+    return _provider_from_row(row) if row else None
+
+
 def get_default_provider() -> ProviderConfig | None:
     with closing(connect()) as conn:
         row = conn.execute(

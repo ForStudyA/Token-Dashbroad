@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -437,6 +438,138 @@ class TestRefreshEndpoint:
 #  工具函数测试
 # ═══════════════════════════════════════════════════════════════════
 
+class TestHermesProxyPassthrough:
+    """Hermes proxy compatibility routes."""
+
+    def test_chat_completion_keeps_model_name(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=1,
+            name="default",
+            base_url="http://upstream.test/v1",
+            api_key="real-key",
+        )
+        captured = {}
+
+        async def fake_proxy_chat_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+        ):
+            captured.update(
+                {
+                    "upstream_url": upstream_url,
+                    "headers": headers,
+                    "upstream_body": upstream_body,
+                    "request_model": request_model,
+                    "target_model": target_model,
+                    "provider": provider_arg,
+                }
+            )
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_default_provider", lambda: provider)
+        monkeypatch.setattr(srv, "get_active_mapping", lambda: {"target_model": "", "provider_id": 0})
+        monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "hermes-config-model", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 200
+        assert captured["upstream_url"] == "http://upstream.test/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer real-key"
+        assert captured["upstream_body"]["model"] == "hermes-config-model"
+        assert captured["request_model"] == "hermes-config-model"
+        assert captured["target_model"] == "hermes-config-model"
+        assert captured["provider"] is provider
+
+    def test_mimo_chat_uses_xiaomi_upstream_and_incoming_auth(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        ds_provider = SimpleNamespace(
+            id=1,
+            name="ds",
+            base_url="http://deepseek.test/v1",
+            api_key="deepseek-key",
+        )
+        captured = {}
+
+        async def fake_proxy_chat_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+        ):
+            captured.update(
+                {
+                    "upstream_url": upstream_url,
+                    "headers": headers,
+                    "upstream_body": upstream_body,
+                    "request_model": request_model,
+                    "target_model": target_model,
+                    "provider": provider_arg,
+                }
+            )
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_default_provider", lambda: ds_provider)
+        monkeypatch.setattr(srv, "get_provider_by_name", lambda name: None)
+        monkeypatch.setattr(srv, "get_active_mapping", lambda: {"target_model": "deepseek-v4-flash", "provider_id": 1})
+        monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer xiaomi-token"},
+            json={"model": "mimo-v2.5", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 200
+        assert captured["upstream_url"] == "https://api.xiaomimimo.com/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer xiaomi-token"
+        assert captured["upstream_body"]["model"] == "mimo-v2.5"
+        assert captured["request_model"] == "mimo-v2.5"
+        assert captured["target_model"] == "mimo-v2.5"
+        assert captured["provider"].name == "mimo"
+
+    def test_models_fallback_without_provider(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        monkeypatch.setattr(srv, "get_default_provider", lambda: None)
+
+        resp = client.get("/v1/models")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["object"] == "list"
+        assert isinstance(data["data"], list)
+
+    def test_api_show_fallback_without_provider(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        monkeypatch.setattr(srv, "get_default_provider", lambda: None)
+
+        resp = client.post("/api/show", json={"name": "hermes-config-model"})
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["name"] == "hermes-config-model"
+        assert "tools" in data["capabilities"]
+
+
 class TestUtilityFunctions:
     """测试 _get_records, _load_cache 等工具函数。"""
 
@@ -493,6 +626,30 @@ class TestUtilityFunctions:
         result = srv._load_cache()
         assert len(result) == 8
         assert len(srv._cache) == 8
+
+    def test_load_cache_uses_proxy_database_only(self, monkeypatch):
+        """_load_cache uses proxy logs as the only data source."""
+        from hermes_token_dash import server as srv
+
+        now = datetime(2026, 6, 25, 10, 0, 0, tzinfo=timezone.utc)
+        proxy_record = TokenUsage(
+            request_id="proxy-1",
+            model="proxy-model",
+            input_tokens=10,
+            output_tokens=5,
+            cache_read=0,
+            cache_creation=0,
+            timestamp=now,
+            data_source="hermes",
+        )
+        monkeypatch.setattr(srv, "parse_proxy_request_logs", lambda: [proxy_record])
+
+        srv._cache = []
+
+        result = srv._load_cache()
+
+        assert result == [proxy_record]
+        assert srv._cache == [proxy_record]
 
     def test_index_prefix_match(self, client):
         """验证 / 匹配（不与其他路由冲突）。"""

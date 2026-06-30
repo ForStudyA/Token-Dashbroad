@@ -6,6 +6,10 @@
 
 ## English
 
+Current data-source policy: the dashboard uses only the local proxy database
+(`~/.token-dashboard/token-dashboard.db`). Claude, Codex, and Hermes local
+history files are intentionally not scanned.
+
 Multi-interface dashboard for AI coding tool token consumption analytics. Visualize per-model token usage, cache hit rates, request counts, and estimated costs across Claude Code, Codex CLI, and Hermes Agent sessions — with auto-detected filtering and auto-refresh.
 
 ### Interfaces
@@ -18,10 +22,10 @@ Multi-interface dashboard for AI coding tool token consumption analytics. Visual
 
 ### Features
 
-- **Multi-source data**: Claude Code JSONL + Codex CLI JSONL + Hermes Agent SQLite session DB
-- **Auto-detected filters**: data sources and agents are discovered from actual records, not hardcoded
-- **Agent filter**: distinguish between `cli`, `sdk-cli`, `claude-vscode` (Claude Code) and `Codex Desktop`, `codex_exec` (Codex)
-- **Profile filter**: filter by Hermes profile (default, named profiles)
+- **Proxy database data**: `~/.token-dashboard/token-dashboard.db` is the single source of truth
+- **Auto-detected filters**: sources, providers, and agents are discovered from proxy records
+- **Agent filter**: distinguish request sources/providers recorded by the proxy
+- **Profile filter**: available for proxy records that include profile metadata
 - **Real-time metrics**: input/output tokens, cache hit rate, estimated cost (¥)
 - **Time filters**: All Time, Today, Last 7 Days, Last 30 Days
 - **Trend charts**: daily aggregated token usage via Chart.js
@@ -65,13 +69,17 @@ pip install -e ".[all]"       # Everything
 
 ### Data Sources
 
+The local proxy database is the single source of truth. Legacy Claude/Codex/Hermes
+log parsers may remain in the repository for tests or migration work, but runtime
+interfaces do not read those agent logs.
+
 | Source | Location | Format | Granularity |
 |--------|----------|--------|-------------|
-| Claude Code | `~/.claude/projects/*/*.jsonl` | JSONL | Per API call |
-| Codex CLI | `~/.codex/sessions/*/rollout-*.jsonl` | JSONL | Per turn |
-| Hermes Agent | `~/AppData/Local/hermes/state.db` | SQLite | Per session |
+| Local proxy | `~/.token-dashboard/token-dashboard.db` | SQLite | Per proxied request |
 
 No configuration needed — paths are auto-detected.
+
+Current runtime configuration is proxy-based, not path-scanning based.
 
 ### REST API
 
@@ -226,6 +234,9 @@ pip install -e ".[all]"       # 全部
 hermes-token-dash/
 ├── main.py
 ├── pyproject.toml
+├── CHANGELOG.md                   # 修改记录（每次提交后更新）
+├── scripts/
+│   └── check_privacy.py           # 提交前隐私检查（激进模式）
 ├── hermes_token_dash/
 │   ├── server.py                    # FastAPI REST API
 │   ├── desktop.py                   # pywebview 桌面版
@@ -238,6 +249,10 @@ hermes-token-dash/
 │   └── static/
 │       └── index.html               # Vue 3 + Chart.js 前端
 └── tests/
+
+### 提交流程
+
+每次修改后：隐私检查 → git 提交推送 → 更新 CHANGELOG.md
 ```
 
 ### 技术栈

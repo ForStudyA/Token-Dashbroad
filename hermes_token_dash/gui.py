@@ -25,11 +25,8 @@ if sys.platform == "win32":
 from hermes_token_dash.parser_claude import (
     aggregate_by_model_date,
     get_available_models,
-    parse_jsonl,
-    scan_claude_jsonls,
 )
-from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
-from hermes_token_dash.parser_hermes import parse_hermes_sessions
+from hermes_token_dash.proxy_db import parse_proxy_request_logs
 
 TIME_FILTERS = ["all", "today", "7d", "30d"]
 TIME_LABELS = {"all": "All Time", "today": "Today", "7d": "Last 7 Days", "30d": "Last 30 Days"}
@@ -272,21 +269,14 @@ class TokenDashApp:
     # ── data ────────────────────────────────────────────────────
 
     def _load_data(self) -> None:
-        self._status_text.configure(text="Scanning...")
+        self._status_text.configure(text="Loading proxy database...")
         self.root.update_idletasks()
-        records = []
-        files = scan_claude_jsonls()
-        for f in files:
-            records.extend(parse_jsonl(f))
-        records.extend(parse_hermes_sessions())
-        codex_files = scan_codex_jsonls()
-        for f in codex_files:
-            records.extend(parse_codex_jsonl(f))
+        records = parse_proxy_request_logs()
         self._all_usages = records
         self._models = get_available_models(records)
         now = datetime.now().strftime("%H:%M:%S")
         self._refresh_label.configure(
-            text=f"Updated {now}  |  {len(files)} Claude + Hermes + {len(codex_files)} Codex"
+            text=f"Updated {now}  |  {len(records)} proxy records"
         )
         self._status_text.configure(text="Ready")
 

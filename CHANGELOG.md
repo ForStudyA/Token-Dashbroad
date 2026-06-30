@@ -23,3 +23,7 @@
 2026-06-30 | 适配器模式重构：adapters/ 目录，Hermes 适配器改 config.yaml + .env 环境变量，替换 _toggle_hermes_config
 2026-06-30 | fix: Hermes 适配器同时设置 model.base_url（Hermes 实际读取的字段）
 2026-06-30 | refactor: 数据源切换为仅代理数据库，移除文件解析器
+2026-06-30 | Hermes 适配器多路径支持 + state session 代理 + 请求级 auth 转发（MiMo 路由）
+2026-06-30 | UI 提供商/映射表单改为弹窗，请求日志移至顶部行
+2026-06-30 | 隐私检查脚本重写：智能误报过滤，新增 SSH/JWT/URL 凭据检测
+2026-06-30 | 测试：新增 hermes adapter 单元测试 + 代理透传路由测试

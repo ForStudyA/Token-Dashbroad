@@ -24,11 +24,8 @@ from textual.widgets import DataTable, Footer, Header, Static
 from hermes_token_dash.parser_claude import (
     aggregate_by_model_date,
     get_available_models,
-    parse_jsonl,
-    scan_claude_jsonls,
 )
-from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
-from hermes_token_dash.parser_hermes import parse_hermes_sessions
+from hermes_token_dash.proxy_db import parse_proxy_request_logs
 from hermes_token_dash.widgets import (
     ModelsBox,
     PulseDot,
@@ -173,14 +170,8 @@ class TokenDashApp(App):
     # ── Data loading ──────────────────────────────────
 
     def _load_data(self) -> None:
-        all_records = []
-        for path in scan_claude_jsonls():
-            all_records.extend(parse_jsonl(path))
-        all_records.extend(parse_hermes_sessions())
-        for path in scan_codex_jsonls():
-            all_records.extend(parse_codex_jsonl(path))
-        self._all_usages = all_records
-        self._available_models = get_available_models(all_records)
+        self._all_usages = parse_proxy_request_logs()
+        self._available_models = get_available_models(self._all_usages)
 
     def _get_filtered_stats(self) -> list:
         tf_map = {"all_time": "all", "today": "today",
