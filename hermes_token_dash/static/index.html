@@ -38,7 +38,12 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 .proxy-grid{display:grid;grid-template-columns:480px 1fr;gap:12px;min-height:0}
 .proxy-panel{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
 .proxy-panel h2{font-size:13px;color:var(--white);margin-bottom:10px}
-.proxy-config-section+.proxy-config-section{margin-top:16px;padding-top:12px;border-top:1px solid var(--border)}
+.proxy-config-panel{height:640px;display:grid;grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:12px}
+.proxy-config-section{min-height:0;display:flex;flex-direction:column}
+.proxy-config-section+.proxy-config-section{padding-top:12px;border-top:1px solid var(--border)}
+.proxy-config-scroll{min-height:0;overflow:auto;flex:1}
+.proxy-config-scroll::-webkit-scrollbar{width:4px}
+.proxy-config-scroll::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 .modal-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:100}
 .modal-box{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;width:400px;max-width:90vw}
 .modal-box h3{font-size:14px;color:var(--white);margin-bottom:12px}
@@ -64,7 +69,7 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 .proxy-form input,.proxy-form select{background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:5px;padding:7px 9px;font-size:12px;outline:none}
 .proxy-form input:focus,.proxy-form select:focus{border-color:var(--accent)}
 .proxy-actions{display:flex;gap:8px;align-items:center}
-.proxy-list{display:flex;flex-direction:column;gap:6px;max-height:320px;overflow-y:auto}
+.proxy-list{display:flex;flex-direction:column;gap:6px}
 .proxy-list::-webkit-scrollbar{width:4px}
 .proxy-list::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
 .proxy-item{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;padding:8px;border:1px solid var(--border);border-radius:6px;background:rgba(255,255,255,.02);font-size:12px}
@@ -309,7 +314,7 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 
 <div class="twrap" v-show="tab==='logs'">
 <div class="thdr"><span style="width:70px">来源</span><span style="width:150px">模型</span><span style="width:90px">输入</span><span style="width:90px">输出</span><span style="width:110px">费用</span><span style="width:70px">延迟</span><span style="width:50px">状态</span><span style="width:100px">时间</span></div>
-<div class="row" v-for="l in logItems" :key="l.request_id"><span style="width:70px"><span class="sbadge" :class="l.data_source==='hermes'?'h':l.data_source==='codex'?'x':'c'">{{l.data_source==='hermes'?'Hermes':l.data_source==='codex'?'Codex':'Claude'}}</span></span><span class="trunc" style="width:150px" :title="displayModel(l)">{{displayModel(l)}}</span><span style="width:90px">{{fmt(l.input_tokens)}}</span><span style="width:90px">{{fmt(l.output_tokens)}}</span><span style="width:110px">¥{{(l.cost||0).toFixed(6)}}</span><span style="width:70px">{{latencySec(l.latency_ms)}}</span><span style="width:50px" :class="l.status_code===200?'g':'r'">{{l.status_code||'-'}}</span><span style="width:110px">{{stime(l.timestamp,timezoneFilter)}}</span></div>
+<div class="row" v-for="l in logItems" :key="l.request_id"><span style="width:70px"><span class="sbadge" :class="sourceClass(l)">{{sourceLabel(l)}}</span></span><span class="trunc" style="width:150px" :title="displayModel(l)">{{displayModel(l)}}</span><span style="width:90px">{{fmt(l.input_tokens)}}</span><span style="width:90px">{{fmt(l.output_tokens)}}</span><span style="width:110px">¥{{(l.cost||0).toFixed(6)}}</span><span style="width:70px">{{latencySec(l.latency_ms)}}</span><span style="width:50px" :class="l.status_code===200?'g':'r'">{{l.status_code||'-'}}</span><span style="width:110px">{{stime(l.timestamp,timezoneFilter)}}</span></div>
 <div class="paginate" v-if="logTotal>logLimit"><button :disabled="logPage<=1" @click="logPage--;fetchLogs()">‹</button><span>{{logPage}}/{{Math.ceil(logTotal/logLimit)}} ({{logTotal}}条)</span><button :disabled="logPage>=Math.ceil(logTotal/logLimit)" @click="logPage++;fetchLogs()">›</button></div>
 <div class="empty" v-if="!logItems.length&&!logLoading">暂无日志</div>
 <div class="empty" v-if="logLoading">加载中...</div>
@@ -323,11 +328,11 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <div class="proxy-muted">代理地址：http://127.0.0.1:8765/v1 · 接口：/v1/chat/completions · 数据库：~/.token-dashboard/token-dashboard.db</div>
 </div>
 <div class="proxy-grid">
-<div class="proxy-panel">
+<div class="proxy-panel proxy-config-panel">
 <div class="proxy-config-section">
 <h2>上游提供商 <button class="btn-muted" style="font-size:11px;margin-left:8px" @click="openProviderModal()">添加提供商</button>
 <button class="proxy-switch" :class="{on:selectedPassthroughActive}" :disabled="!selectedProviderId" style="margin-left:12px;font-size:11px" @click="togglePassthrough()"><span class="track"></span><span>原样转发</span></button></h2>
-<div class="proxy-list" style="margin-top:12px">
+<div class="proxy-list proxy-config-scroll" style="margin-top:12px">
 <div class="proxy-item" v-for="p in proxyProviders" :key="p.id" :class="{selected:selectedProviderId===p.id}" @click="selectProvider(p.id)">
 <div><b>{{p.name}}</b><div class="proxy-muted">{{p.base_url}} · {{p.api_key?'已配置 Key':'未配置 Key'}}</div></div>
 <div class="provider-actions">
@@ -342,19 +347,21 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 </div>
 <div class="proxy-config-section">
 <h2>模型映射 <button class="btn-muted" style="font-size:11px;margin-left:8px" @click="openMappingModal()">添加映射</button></h2>
+<div class="proxy-config-scroll">
 <table class="proxy-table" style="margin-top:12px">
 <thead><tr><th>模型</th><th>提供商</th><th style="width:90px"></th><th></th></tr></thead>
-<tbody><tr v-for="m in visibleMappings" :key="m.id"><td :style="!m.enabled?'opacity:.5':''">{{m.target_model}}</td><td>{{m.provider_name}}</td>
+<tbody><tr v-for="m in visibleMappings" :key="m.id"><td :style="!m.enabled?'opacity:.5':''">{{mappingDisplay(m)}}</td><td>{{m.provider_name}}</td>
 <td><span v-if="mappingInUse(m)" class="sbadge h" style="font-size:11px">使用中</span><button v-else class="btn-enable btn-muted" style="font-size:11px;color:var(--green)" @click="enableMapping(m)">启用</button></td>
 <td><div style="display:flex;gap:6px"><button class="btn-muted" @click="openMappingModal(m)">编辑</button><button class="btn-muted" style="color:var(--red)" @click="deleteMapping(m.id)">删除</button></div></td></tr></tbody>
 </table>
 <div class="empty" v-if="!visibleMappings.length">{{selectedProviderId?'该提供商暂无模型映射。':'请先选择一个提供商。'}}</div>
 </div>
 </div>
+</div>
 <div class="proxy-panel">
 <h2>最近请求</h2>
 <div class="thdr"><span style="width:70px">来源</span><span style="width:150px">模型</span><span style="width:90px">输入</span><span style="width:90px">输出</span><span style="width:110px">费用</span><span style="width:70px">延迟</span><span style="width:50px">状态</span><span style="width:100px">时间</span></div>
-<div class="row" v-for="l in proxyLogs.slice(0,20)" :key="l.request_id"><span style="width:70px"><span class="sbadge h">{{l.provider_name}}</span></span><span class="trunc" style="width:150px" :title="displayModel(l)">{{displayModel(l)}}</span><span style="width:90px">{{fmt((l.input_tokens||0)+(l.cache_read_tokens||0))}}</span><span style="width:90px">{{fmt(l.output_tokens)}}</span><span style="width:110px">¥{{Number(l.total_cost_cny||0).toFixed(6)}}</span><span style="width:70px">{{latencySec(l.latency_ms)}}</span><span style="width:50px" :class="l.status_code===200?'g':'r'">{{l.status_code||'-'}}</span><span style="width:110px">{{stime(l.created_at_iso,timezoneFilter)}}</span></div>
+<div class="row" v-for="l in proxyLogs.slice(0,20)" :key="l.request_id"><span style="width:70px"><span class="sbadge" :class="sourceClass(l)">{{sourceLabel(l)}}</span></span><span class="trunc" style="width:150px" :title="displayModel(l)">{{displayModel(l)}}</span><span style="width:90px">{{fmt((l.input_tokens||0)+(l.cache_read_tokens||0))}}</span><span style="width:90px">{{fmt(l.output_tokens)}}</span><span style="width:110px">¥{{Number(l.total_cost_cny||0).toFixed(6)}}</span><span style="width:70px">{{latencySec(l.latency_ms)}}</span><span style="width:50px" :class="l.status_code===200?'g':'r'">{{l.status_code||'-'}}</span><span style="width:110px">{{stime(l.created_at_iso,timezoneFilter)}}</span></div>
 <div class="empty" v-if="!proxyLogs.length">暂无代理请求</div>
 </div>
 </div>
@@ -433,6 +440,10 @@ function hitColor(v){if(v===0)return'';return v>=80?'g':v>=40?'y':'r'}
 function pricePerM(s){const total=s.input+s.output;if(!total)return'¥0';return'¥'+(s.cost*1e6/total).toFixed(2)}
 function modelPrices(m){const p=pricing.value[m];if(!p)return{in:'-',out:'-',cr:'-'};const r=p.currency==='USD'?exchangeRate.value:1;return{in:'¥'+(p.input_price*r).toFixed(2),out:'¥'+(p.output_price*r).toFixed(2),cr:p.cache_read_price>0?'¥'+(p.cache_read_price*r).toFixed(3):'-'}}
 function displayModel(row){if(row.display_model)return row.display_model;const req=row.request_model||row.model||'';const actual=row.model||row.request_model||'';return req&&actual&&req!==actual?req+'->'+actual:(actual||req||'-')}
+function mappingDisplay(m){const req=m.source_model||'*';const actual=m.target_model||'';return req&&actual&&req!==actual?req+'->'+actual:(actual||req||'-')}
+function sourceKey(row){return row.data_source||row.source_app||''}
+function sourceLabel(row){const s=sourceKey(row);return s==='hermes'?'Hermes':s==='codex'?'Codex':s==='claude'?'Claude':(s||'-')}
+function sourceClass(row){const s=sourceKey(row);return s==='hermes'?'h':s==='codex'?'x':'c'}
 function latencySec(ms){const n=Number(ms||0);if(!n)return'-';const s=n/1000;return (Math.round(s*10)/10).toLocaleString(undefined,{maximumFractionDigits:1})+'s'}
 function tzIana(n){n=Number(n);if(isNaN(n)||n<-12||n>14)n=8;const s=n<=0?'+':'-';return'Etc/GMT'+s+Math.abs(n)}
 function stime(iso,tz){if(!iso)return'';const d=new Date(iso);if(isNaN(d.getTime()))return'';const opts={timeZone:tzIana(tz??8),month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'};return d.toLocaleString([],opts)}
@@ -584,6 +595,6 @@ watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer
 watch(timezoneFilter,()=>{const nextTz=Number(timezoneFilter.value);currentTime.value=new Date().toLocaleTimeString('zh-CN',{timeZone:tzIana(nextTz),hour:'2-digit',minute:'2-digit',second:'2-digit'});if(timeFilter.value==='custom'){syncPickersToTimezone(prevTimezone,nextTz);refreshView()}prevTimezone=nextTz})
 onUnmounted(()=>{if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);if(fpStart.value)fpStart.value.destroy();if(fpEnd.value)fpEnd.value.destroy()})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,customStart,customEnd,lastRefresh,currentTime,isRefreshing,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,displayModel,latencySec,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings,balance,reLoginMimo,dsBalance,showDsKeyInput,dsKeyInput,saveDsKey,onTimeFilterChange,view,proxyEnabled,proxyStatusSaving,saveProxyStatus,toggleProxyStatus,proxyProviders,proxyMappings,proxyLogs,activeMapping,selectedProviderId,passthroughActive,selectedPassthroughActive,visibleMappings,activeProxyLabel,lastMappings,showProviderForm,showProviderModal,showMappingForm,showMappingModal,providerForm,mappingForm,remoteModels,selectedRemoteModels,modelLoading,modelMessage,resetProviderForm,openProviderModal,editProvider,selectProvider,saveProvider,providerInUse,mappingInUse,toggleProviderEnabled,toggleMappingEnabled,togglePassthrough,testProvider,fetchProviderModels,deleteProvider,openMappingModal,editMapping,saveMapping,enableMapping,deleteMapping}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,customStart,customEnd,lastRefresh,currentTime,isRefreshing,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,displayModel,mappingDisplay,sourceLabel,sourceClass,latencySec,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings,balance,reLoginMimo,dsBalance,showDsKeyInput,dsKeyInput,saveDsKey,onTimeFilterChange,view,proxyEnabled,proxyStatusSaving,saveProxyStatus,toggleProxyStatus,proxyProviders,proxyMappings,proxyLogs,activeMapping,selectedProviderId,passthroughActive,selectedPassthroughActive,visibleMappings,activeProxyLabel,lastMappings,showProviderForm,showProviderModal,showMappingForm,showMappingModal,providerForm,mappingForm,remoteModels,selectedRemoteModels,modelLoading,modelMessage,resetProviderForm,openProviderModal,editProvider,selectProvider,saveProvider,providerInUse,mappingInUse,toggleProviderEnabled,toggleMappingEnabled,togglePassthrough,testProvider,fetchProviderModels,deleteProvider,openMappingModal,editMapping,saveMapping,enableMapping,deleteMapping}
 }}).mount('#app')
 </script></body></html>
