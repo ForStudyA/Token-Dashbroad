@@ -552,6 +552,22 @@ def _extract_error_text(payload: Any) -> str:
     return ""
 
 
+def _extract_response_model(payload: Any) -> str:
+    if isinstance(payload, dict):
+        value = payload.get("model")
+        if value:
+            return str(value)
+    return ""
+
+
+def _display_model(request_model: str, actual_model: str) -> str:
+    request_model = request_model or ""
+    actual_model = actual_model or request_model
+    if request_model and actual_model and request_model != actual_model:
+        return f"{request_model}->{actual_model}"
+    return actual_model or request_model or "-"
+
+
 @app.get("/api/proxy/providers")
 def api_proxy_providers():
     return {"providers": list_providers()}
@@ -836,11 +852,14 @@ async def _proxy_chat_json(
         payload = json.loads(content.decode("utf-8"))
         request_id = payload.get("id") or request_id
         raw_usage = _extract_usage_from_payload(payload)
+        response_model = _extract_response_model(payload)
         if status_code >= 400 and not error_message:
             error_message = _extract_error_text(payload)
     except Exception:
+        response_model = ""
         if status_code >= 400 and not error_message:
             error_message = content.decode("utf-8", errors="ignore")[:1000]
+    actual_model = response_model or target_model
 
     latency_ms = int((time.perf_counter() - start_ts) * 1000)
     insert_request_log(
@@ -850,7 +869,7 @@ async def _proxy_chat_json(
         provider_name=provider.name,
         endpoint="/v1/chat/completions",
         request_model=request_model,
-        model=target_model,
+        model=actual_model,
         raw_usage=raw_usage,
         status_code=status_code,
         error_message=error_message,
@@ -879,6 +898,7 @@ async def _proxy_chat_stream(
 
     request_id = str(uuid.uuid4())
     raw_usage = None
+    response_model = ""
     error_message = ""
     first_token_ms = 0
     upstream_resp = None
@@ -946,7 +966,12 @@ async def _proxy_chat_stream(
                     break
                 if chunk and first_token_ms <= 0:
                     first_token_ms = int((time.perf_counter() - start_ts) * 1000)
-                _inspect_sse_chunk(chunk, lambda rid: _set_request_id(rid), lambda usage: _set_usage(usage))
+                _inspect_sse_chunk(
+                    chunk,
+                    lambda rid: _set_request_id(rid),
+                    lambda usage: _set_usage(usage),
+                    lambda model: _set_response_model(model),
+                )
                 yield chunk
         except GeneratorExit:
             error_message = "client_aborted"
@@ -966,7 +991,7 @@ async def _proxy_chat_stream(
                     provider_name=provider.name,
                     endpoint="/v1/chat/completions",
                     request_model=request_model,
-                    model=target_model,
+                    model=response_model or target_model,
                     raw_usage=raw_usage,
                     status_code=499 if error_message == "client_aborted" else status_code,
                     error_message=error_message,
@@ -987,6 +1012,11 @@ async def _proxy_chat_stream(
         nonlocal raw_usage
         raw_usage = value
 
+    def _set_response_model(value: str):
+        nonlocal response_model
+        if value:
+            response_model = value
+
     return StreamingResponse(
         body_iter(),
         status_code=status_code,
@@ -998,6 +1028,7 @@ def _inspect_sse_chunk(
     chunk: bytes,
     set_request_id,
     set_usage,
+    set_response_model=None,
 ) -> None:
     try:
         text = chunk.decode("utf-8", errors="ignore")
@@ -1017,6 +1048,8 @@ def _inspect_sse_chunk(
         if isinstance(payload, dict):
             if payload.get("id"):
                 set_request_id(str(payload["id"]))
+            if set_response_model and payload.get("model"):
+                set_response_model(str(payload["model"]))
             usage = _extract_usage_from_payload(payload)
             if usage is not None:
                 set_usage(usage)
@@ -1253,6 +1286,7 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
         items.append({
             "request_id": r.request_id,
             "model": r.model,
+            "display_model": _display_model(getattr(r, "request_model", ""), r.model),
             "input_tokens": r.input_tokens,
             "output_tokens": r.output_tokens + getattr(r, "reasoning_tokens", 0),
             "cache_read": r.cache_read,

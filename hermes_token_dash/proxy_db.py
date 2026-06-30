@@ -836,6 +836,13 @@ def proxy_log_rows(limit: int = 100) -> list[dict[str, Any]]:
     result = []
     for row in rows:
         item = dict(row)
+        request_model = item.get("request_model") or ""
+        actual_model = item.get("model") or request_model
+        item["display_model"] = (
+            f"{request_model}->{actual_model}"
+            if request_model and actual_model and request_model != actual_model
+            else (actual_model or request_model or "-")
+        )
         item["created_at_iso"] = datetime.fromtimestamp(
             int(row["created_at"] or 0), timezone.utc
         ).isoformat()
