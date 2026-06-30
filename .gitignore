@@ -36,5 +36,8 @@ build/
 *.tmp
 *.log
 
+# Temp prompt (historical artifact, not a real file source)
+.temp_prompt.txt
+
 # pip output
 =5.0
