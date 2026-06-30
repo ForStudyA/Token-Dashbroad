@@ -26,6 +26,7 @@ HERMES_HOMES = [
     Path.home() / "AppData" / "Local" / "hermes",
 ]
 ORIGINALS_PATH = Path.home() / ".token-dashboard" / "hermes_proxy_originals.json"
+LOCAL_PROXY_HOSTS = ("127.0.0.1:8765", "localhost:8765")
 
 # Built-in providers that use env vars for base_url override
 BUILTIN_PROVIDERS: dict[str, str] = {
@@ -208,31 +209,51 @@ class HermesAdapter(AgentAdapter):
             cfg = self._read_config(config_path)
             existing_config = originals["configs"].get(str(config_path), {})
             config_originals: dict[str, Any] = {
-                "custom_providers": dict(existing_config.get("custom_providers") or {})
+                "custom_providers": {
+                    name: url
+                    for name, url in dict(existing_config.get("custom_providers") or {}).items()
+                    if not self._is_local_proxy_url(url)
+                }
             }
             for prov in cfg.get("custom_providers", []):
                 if isinstance(prov, dict) and prov.get("name"):
-                    if prov["name"] not in config_originals["custom_providers"]:
+                    if (
+                        prov["name"] not in config_originals["custom_providers"]
+                        and not self._is_local_proxy_url(prov.get("base_url", ""))
+                    ):
                         config_originals["custom_providers"][prov["name"]] = prov.get("base_url", "")
             model = cfg.get("model") or {}
-            if existing_config.get("model_base_url"):
+            if existing_config.get("model_base_url") and not self._is_local_proxy_url(existing_config["model_base_url"]):
                 config_originals["model_base_url"] = existing_config["model_base_url"]
-            elif isinstance(model, dict) and model.get("base_url"):
+            elif (
+                isinstance(model, dict)
+                and model.get("base_url")
+                and not self._is_local_proxy_url(model["base_url"])
+            ):
                 config_originals["model_base_url"] = model["base_url"]
             originals["configs"][str(config_path)] = config_originals
 
             env_path_key = str(config_path.parent / ".env")
-            env_originals: dict[str, str] = dict(originals["env"].get(env_path_key) or {})
+            env_originals: dict[str, str] = {
+                provider: url
+                for provider, url in dict(originals["env"].get(env_path_key) or {}).items()
+                if not self._is_local_proxy_url(url)
+            }
             for provider_name, env_var in BUILTIN_PROVIDERS.items():
                 val = self._read_env_var(config_path.parent, env_var)
-                if val and provider_name not in env_originals:
+                if val and provider_name not in env_originals and not self._is_local_proxy_url(val):
                     env_originals[provider_name] = val
             originals["env"][env_path_key] = env_originals
 
         for db_path in self._state_db_paths():
-            existing_rows = dict(originals["state_dbs"].get(str(db_path), {}) or {})
+            existing_rows = {
+                rowid: url
+                for rowid, url in dict(originals["state_dbs"].get(str(db_path), {}) or {}).items()
+                if not self._is_local_proxy_url(url)
+            }
             for rowid, base_url in self._read_state_session_base_urls(db_path).items():
-                existing_rows.setdefault(rowid, base_url)
+                if not self._is_local_proxy_url(base_url):
+                    existing_rows.setdefault(rowid, base_url)
             originals["state_dbs"][str(db_path)] = existing_rows
 
         ORIGINALS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -401,3 +422,7 @@ class HermesAdapter(AgentAdapter):
             if k != key:
                 lines.append(line)
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _is_local_proxy_url(self, value: Any) -> bool:
+        text = str(value or "")
+        return any(host in text for host in LOCAL_PROXY_HOSTS)

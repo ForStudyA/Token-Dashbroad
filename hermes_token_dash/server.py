@@ -32,6 +32,7 @@ from hermes_token_dash.parser_claude import (
 from hermes_token_dash.proxy_db import (
     get_default_provider,
     get_provider,
+    get_provider_by_name,
     get_active_mapping,
     set_active_mapping,
     get_proxy_enabled,
@@ -228,6 +229,26 @@ class ProxyActiveMappingBody(BaseModel):
 PROXY_URL = "http://127.0.0.1:8765/v1"
 
 
+class RuntimeProxyProvider:
+    """Provider settings resolved for a single proxied request."""
+
+    def __init__(
+        self,
+        id: int | None,
+        name: str,
+        base_url: str,
+        api_key: str = "",
+        enabled: bool = True,
+        auth_header: str = "",
+    ) -> None:
+        self.id = id
+        self.name = name
+        self.base_url = base_url
+        self.api_key = api_key
+        self.enabled = enabled
+        self.auth_header = auth_header
+
+
 def _toggle_agent_configs(enable_proxy: bool) -> None:
     """Toggle proxy for all registered agent adapters."""
     from hermes_token_dash.adapters import ADAPTERS
@@ -286,8 +307,41 @@ def _request_auth_header(request: Request) -> str:
     return auth.strip()
 
 
+def _is_mimo_model(model: str) -> bool:
+    value = (model or "").lower()
+    return value.startswith("mimo-") or "/mimo-" in value or "xiaomi/mimo" in value
+
+
+def _provider_with_request_auth(provider, auth_header: str):
+    if not auth_header:
+        return provider
+    return RuntimeProxyProvider(
+        id=provider.id,
+        name=provider.name,
+        base_url=provider.base_url,
+        api_key=provider.api_key,
+        enabled=provider.enabled,
+        auth_header=auth_header,
+    )
+
+
+def _mimo_provider_from_request(auth_header: str):
+    provider = get_provider_by_name("mimo") or get_provider_by_name("xiaomi")
+    if provider:
+        return _provider_with_request_auth(provider, auth_header)
+    return RuntimeProxyProvider(
+        id=None,
+        name="mimo",
+        base_url="https://api.xiaomimimo.com/v1",
+        auth_header=auth_header,
+    )
+
+
 def _select_chat_provider(request_model: str, auth_header: str):
     """Resolve the upstream provider/model for an incoming chat request."""
+    if _is_mimo_model(request_model):
+        return request_model, _mimo_provider_from_request(auth_header)
+
     provider = get_default_provider()
     if not provider:
         return request_model, None
@@ -524,14 +578,7 @@ def proxy_models():
     """Hermes-compatible model list passthrough with a local fallback."""
     if not get_proxy_enabled():
         return _openai_error("Local proxy is disabled", 503)
-    provider = get_default_provider()
-    if not provider:
-        return _model_list_fallback()
-    return _upstream_get_json(
-        _upstream_models_url(provider.base_url),
-        provider,
-        _model_list_fallback(),
-    )
+    return _model_list_fallback()
 
 
 @app.get("/v1/models/{model_id:path}")
@@ -539,14 +586,7 @@ def proxy_model(model_id: str):
     """Hermes-compatible single-model probe passthrough."""
     if not get_proxy_enabled():
         return _openai_error("Local proxy is disabled", 503)
-    provider = get_default_provider()
-    if not provider:
-        return _model_fallback(model_id)
-    return _upstream_get_json(
-        _upstream_model_url(provider.base_url, model_id),
-        provider,
-        _model_fallback(model_id),
-    )
+    return _model_fallback(model_id)
 
 
 @app.post("/api/show")
@@ -561,15 +601,7 @@ async def proxy_api_show(request: Request):
     except Exception:
         body = {}
     model_id = str(body.get("name") or body.get("model") or "")
-    provider = get_default_provider()
-    if not provider:
-        return _show_fallback(model_id)
-    return _upstream_post_json(
-        _upstream_show_url(provider.base_url),
-        provider,
-        body,
-        _show_fallback(model_id),
-    )
+    return _show_fallback(model_id)
 
 
 @app.post("/v1/chat/completions")

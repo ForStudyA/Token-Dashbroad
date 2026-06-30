@@ -492,8 +492,8 @@ class TestHermesProxyPassthrough:
         assert captured["target_model"] == "hermes-config-model"
         assert captured["provider"] is provider
 
-    def test_any_model_uses_default_provider_with_mapping(self, monkeypatch, client):
-        """All models (including mimo) route through default provider + active mapping."""
+    def test_mimo_model_bypasses_ds_mapping(self, monkeypatch, client):
+        """Mimo models route to Xiaomi even when a DS mapping is active."""
         from fastapi.responses import JSONResponse
         from hermes_token_dash import server as srv
 
@@ -529,6 +529,7 @@ class TestHermesProxyPassthrough:
             return JSONResponse({"ok": True})
 
         monkeypatch.setattr(srv, "get_default_provider", lambda: ds_provider)
+        monkeypatch.setattr(srv, "get_provider_by_name", lambda name: None)
         monkeypatch.setattr(srv, "get_provider", lambda pid: ds_provider if pid == 1 else None)
         monkeypatch.setattr(srv, "get_active_mapping", lambda: {"target_model": "deepseek-v4-flash", "provider_id": 1})
         monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
@@ -539,11 +540,11 @@ class TestHermesProxyPassthrough:
         )
 
         assert resp.status_code == 200
-        assert captured["upstream_url"] == "http://deepseek.test/v1/chat/completions"
-        assert captured["upstream_body"]["model"] == "deepseek-v4-flash"
+        assert captured["upstream_url"] == "https://api.xiaomimimo.com/v1/chat/completions"
+        assert captured["upstream_body"]["model"] == "mimo-v2.5"
         assert captured["request_model"] == "mimo-v2.5"
-        assert captured["target_model"] == "deepseek-v4-flash"
-        assert captured["provider"].name == "ds"
+        assert captured["target_model"] == "mimo-v2.5"
+        assert captured["provider"].name == "mimo"
 
     def test_models_fallback_without_provider(self, monkeypatch, client):
         from hermes_token_dash import server as srv
