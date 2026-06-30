@@ -343,7 +343,7 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <table class="proxy-table" style="margin-top:12px">
 <thead><tr><th>模型</th><th>提供商</th><th style="width:90px"></th><th></th></tr></thead>
 <tbody><tr v-for="m in (activeMapping.provider_id ? proxyMappings.filter(x=>x.provider_id===activeMapping.provider_id&&!x.protected) : proxyMappings.filter(x=>!x.protected))" :key="m.id"><td :style="!m.enabled?'opacity:.5':''">{{m.target_model}}</td><td>{{m.provider_name}}</td>
-<td><span v-if="activeMapping.target_model===m.target_model&&activeMapping.provider_id===m.provider_id" class="sbadge h" style="font-size:11px">使用中</span><button v-else-if="m.enabled" class="btn-enable btn-muted" style="font-size:11px;color:var(--green)" @click="enableMapping(m)">启用</button><button v-else class="btn-enable btn-muted" style="font-size:11px;color:var(--muted)" @click="enableMapping(m)">已禁用</button></td>
+<td><span v-if="activeMapping.target_model===m.target_model&&activeMapping.provider_id===m.provider_id" class="sbadge h" style="font-size:11px">使用中</span><button v-else class="btn-enable btn-muted" :style="'font-size:11px;color:'+(m.enabled?'var(--green)':'var(--muted)')" @click="enableMapping(m)">启用</button></td>
 <td><div style="display:flex;gap:6px"><button class="btn-muted" @click="openMappingModal(m)">编辑</button><button class="btn-muted" style="color:var(--red)" @click="deleteMapping(m.id)">删除</button></div></td></tr></tbody>
 </table>
 <div class="empty" v-if="!proxyMappings.filter(x=>!x.protected).length">暂无模型映射。配置后所有请求将映射到指定的上游模型。</div>
