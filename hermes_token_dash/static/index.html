@@ -335,8 +335,8 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <div class="proxy-panel">
 <h2>最近请求</h2>
 <table class="proxy-table">
-<thead><tr><th>时间</th><th class="tr">延迟</th><th>状态</th><th>提供商</th><th>请求模型</th><th>上游模型</th><th class="tr">输入</th><th class="tr">输出</th><th class="tr">费用</th></tr></thead>
-<tbody><tr v-for="l in proxyLogs.slice(0,10)" :key="l.request_id"><td>{{stime(l.created_at_iso,timezoneFilter)}}</td><td class="tr">{{l.latency_ms}}ms</td><td :class="l.status_code===200?'g':'r'">{{l.status_code}}{{l.usage_missing?' · 无 usage':''}}</td><td>{{l.provider_name}}</td><td>{{l.request_model}}</td><td>{{l.model}}</td><td class="tr">{{fmt((l.input_tokens||0)+(l.cache_read_tokens||0))}}</td><td class="tr">{{fmt(l.output_tokens)}}</td><td class="tr">¥{{Number(l.total_cost_cny||0).toFixed(6)}}</td></tr></tbody>
+<thead><tr><th>来源</th><th>模型</th><th class="tr">输入</th><th class="tr">输出</th><th class="tr">费用</th><th class="tr">延迟</th><th>状态</th><th>时间</th></tr></thead>
+<tbody><tr v-for="l in proxyLogs.slice(0,10)" :key="l.request_id"><td>{{l.provider_name}}</td><td>{{l.model}}</td><td class="tr">{{fmt((l.input_tokens||0)+(l.cache_read_tokens||0))}}</td><td class="tr">{{fmt(l.output_tokens)}}</td><td class="tr">¥{{Number(l.total_cost_cny||0).toFixed(6)}}</td><td class="tr">{{l.latency_ms}}ms</td><td :class="l.status_code===200?'g':'r'">{{l.status_code}}{{l.usage_missing?' · 无 usage':''}}</td><td>{{stime(l.created_at_iso,timezoneFilter)}}</td></tr></tbody>
 </table>
 <div class="empty" v-if="!proxyLogs.length">暂无代理请求</div>
 </div>
