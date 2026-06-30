@@ -71,6 +71,7 @@ class HermesAdapter(AgentAdapter):
         try:
             self._save_originals()
             self._modify_custom_providers(proxy_url)
+            self._modify_model_base_url(proxy_url)
             self._set_builtin_env_vars(proxy_url)
             return True
         except Exception:
@@ -83,6 +84,7 @@ class HermesAdapter(AgentAdapter):
             if not self._originals and ORIGINALS_PATH.exists():
                 self._originals = json.loads(ORIGINALS_PATH.read_text(encoding="utf-8"))
             self._restore_custom_providers()
+            self._restore_model_base_url()
             self._restore_builtin_env_vars()
             # Clean up
             self._originals.clear()
@@ -91,6 +93,30 @@ class HermesAdapter(AgentAdapter):
             return True
         except Exception:
             return False
+
+    # ── Model base_url ─────────────────────────────────────────
+
+    def _modify_model_base_url(self, proxy_url: str) -> None:
+        """Set model.base_url to proxy (this is what Hermes actually reads)."""
+        cfg = self._read_config()
+        model = cfg.get("model") or {}
+        if isinstance(model, dict):
+            model["base_url"] = proxy_url
+            cfg["model"] = model
+        self._write_config(cfg)
+
+    def _restore_model_base_url(self) -> None:
+        """Restore model.base_url to original."""
+        original = self._originals.get("model_base_url")
+        cfg = self._read_config()
+        model = cfg.get("model") or {}
+        if isinstance(model, dict):
+            if original:
+                model["base_url"] = original
+            elif "base_url" in model:
+                del model["base_url"]
+            cfg["model"] = model
+        self._write_config(cfg)
 
     # ── Config read/write ──────────────────────────────────────
 
@@ -113,6 +139,10 @@ class HermesAdapter(AgentAdapter):
         for prov in cfg.get("custom_providers", []):
             if isinstance(prov, dict) and prov.get("name"):
                 originals["custom_providers"][prov["name"]] = prov.get("base_url", "")
+        # Save model.base_url
+        model = cfg.get("model") or {}
+        if isinstance(model, dict) and model.get("base_url"):
+            originals["model_base_url"] = model["base_url"]
         # Save env var originals
         for provider_name, env_var in BUILTIN_PROVIDERS.items():
             val = self._read_env_var(env_var)
