@@ -384,8 +384,6 @@ def _select_chat_provider(request_model: str, auth_header: str):
         provider = get_provider(provider_id)
         if provider:
             if mode == "passthrough":
-                if _is_mimo_model(request_model):
-                    return request_model, _mimo_provider_from_request(auth_header)
                 return request_model, provider
             if mode == "mapping" and active.get("target_model"):
                 return str(active["target_model"]), provider
