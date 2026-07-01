@@ -37,3 +37,4 @@
 2026-07-01 | 移除 passthrough 分支 MiMo 特判，保持原样转发语义纯粹
 2026-07-01 | 已禁用 provider 路由拒绝；agent config 异步化非阻塞；原样转发按钮修复
 2026-07-02 | Claude Code adapter：读写 ~/.claude/settings.json 管理 ANTHROPIC_BASE_URL；Anthropic Messages 兼容代理 /v1/messages（含流式）；Agent 配置面板 UI；代理端点 /api/proxy/agents + sync
+2026-07-02 | 代理配置按 agent 隔离：provider/mapping/active-mapping 表增加 agent_name 字段；UI agent 切换联动刷新；/v1/chat/completions 用 hermes、/v1/messages 用 claude_code

@@ -43,6 +43,7 @@ from hermes_token_dash.proxy_db import (
     insert_request_log,
     list_mappings,
     list_providers,
+    normalize_agent_name,
     normalize_usage,
     parse_proxy_request_logs,
     proxy_log_rows,
@@ -214,6 +215,7 @@ def index():
 
 class ProxyProviderBody(BaseModel):
     id: int | None = None
+    agent_name: str = "hermes"
     name: str
     base_url: str
     api_key: str = ""
@@ -222,6 +224,7 @@ class ProxyProviderBody(BaseModel):
 
 class ProxyMappingBody(BaseModel):
     id: int | None = None
+    agent_name: str = "hermes"
     source_model: str
     target_model: str
     provider_id: int
@@ -233,6 +236,7 @@ class ProxyEnabledBody(BaseModel):
 
 
 class ProxyActiveMappingBody(BaseModel):
+    agent_name: str = "hermes"
     mode: str = "mapping"
     target_model: str = ""
     provider_id: int = 0
@@ -432,8 +436,35 @@ def _provider_enabled(provider) -> bool:
     return bool(provider and getattr(provider, "enabled", True))
 
 
-def _mimo_provider_from_request(auth_header: str):
-    provider = get_provider_by_name("mimo") or get_provider_by_name("xiaomi")
+def _active_mapping_for_agent(agent_name: str):
+    try:
+        return get_active_mapping(agent_name)
+    except TypeError:
+        return get_active_mapping()
+
+
+def _provider_by_name_for_agent(name: str, agent_name: str):
+    try:
+        return get_provider_by_name(name, agent_name)
+    except TypeError:
+        return get_provider_by_name(name)
+
+
+def _default_provider_for_agent(agent_name: str):
+    try:
+        return get_default_provider(agent_name)
+    except TypeError:
+        return get_default_provider()
+
+
+def _provider_belongs_to_agent(provider, agent_name: str) -> bool:
+    if not provider:
+        return False
+    return getattr(provider, "agent_name", normalize_agent_name(agent_name)) == normalize_agent_name(agent_name)
+
+
+def _mimo_provider_from_request(auth_header: str, agent_name: str = "hermes"):
+    provider = _provider_by_name_for_agent("mimo", agent_name) or _provider_by_name_for_agent("xiaomi", agent_name)
     if _provider_enabled(provider):
         return _provider_with_request_auth(provider, auth_header)
     return RuntimeProxyProvider(
@@ -444,29 +475,29 @@ def _mimo_provider_from_request(auth_header: str):
     )
 
 
-def _select_chat_provider(request_model: str, auth_header: str):
+def _select_chat_provider(request_model: str, auth_header: str, agent_name: str = "hermes"):
     """Resolve the upstream provider/model for an incoming chat request."""
-    active = get_active_mapping()
+    active = _active_mapping_for_agent(agent_name)
     mode = active.get("mode") or ("mapping" if active.get("target_model") else "")
     provider_id = int(active.get("provider_id") or 0)
     if mode and provider_id:
         provider = get_provider(provider_id)
-        if _provider_enabled(provider):
+        if _provider_enabled(provider) and _provider_belongs_to_agent(provider, agent_name):
             if mode == "passthrough":
                 return request_model, provider
             if mode == "mapping" and active.get("target_model"):
                 return str(active["target_model"]), provider
 
     if _is_mimo_model(request_model):
-        return request_model, _mimo_provider_from_request(auth_header)
+        return request_model, _mimo_provider_from_request(auth_header, agent_name)
     return request_model, None
 
 
-def _select_disabled_chat_provider(request_model: str, auth_header: str):
+def _select_disabled_chat_provider(request_model: str, auth_header: str, agent_name: str = "hermes"):
     """Best-effort forwarding when a running agent still points at a disabled proxy."""
     if _is_mimo_model(request_model):
-        return request_model, _mimo_provider_from_request(auth_header)
-    provider = _get_active_provider_for_metadata() or get_default_provider()
+        return request_model, _mimo_provider_from_request(auth_header, agent_name)
+    provider = _get_active_provider_for_metadata(agent_name) or _default_provider_for_agent(agent_name)
     if _provider_enabled(provider):
         return request_model, provider
     return request_model, None
@@ -604,11 +635,11 @@ def _has_valid_model_list(payload: Any) -> bool:
     return bool(_extract_model_ids(payload))
 
 
-def _get_active_provider_for_metadata():
-    active = get_active_mapping()
+def _get_active_provider_for_metadata(agent_name: str = "hermes"):
+    active = _active_mapping_for_agent(agent_name)
     provider_id = int(active.get("provider_id") or 0)
     provider = get_provider(provider_id) if provider_id else None
-    return provider if _provider_enabled(provider) else None
+    return provider if _provider_enabled(provider) and _provider_belongs_to_agent(provider, agent_name) else None
 
 
 def _normalize_chat_request_body(body: dict[str, Any], target_model: str) -> dict[str, Any]:
@@ -845,31 +876,32 @@ def _display_model(request_model: str, actual_model: str) -> str:
 
 
 @app.get("/api/proxy/providers")
-def api_proxy_providers():
-    return {"providers": list_providers()}
+def api_proxy_providers(agent: str = Query("hermes")):
+    return {"providers": list_providers(agent_name=agent)}
 
 
 @app.post("/api/proxy/providers")
 def api_proxy_save_provider(body: ProxyProviderBody):
     upsert_provider(
+        agent_name=body.agent_name,
         name=body.name.strip(),
         base_url=body.base_url.strip(),
         api_key=body.api_key.strip(),
         enabled=body.enabled,
         provider_id=body.id,
     )
-    return {"ok": True, "providers": list_providers()}
+    return {"ok": True, "providers": list_providers(agent_name=body.agent_name)}
 
 
 @app.delete("/api/proxy/providers/{provider_id}")
-def api_proxy_delete_provider(provider_id: int):
-    delete_provider(provider_id)
-    return {"ok": True, "providers": list_providers()}
+def api_proxy_delete_provider(provider_id: int, agent: str = Query("hermes")):
+    delete_provider(provider_id, agent_name=agent)
+    return {"ok": True, "providers": list_providers(agent_name=agent)}
 
 
 @app.post("/api/proxy/providers/{provider_id}/toggle")
-def api_proxy_toggle_provider(provider_id: int):
-    return toggle_provider(provider_id)
+def api_proxy_toggle_provider(provider_id: int, agent: str = Query("hermes")):
+    return toggle_provider(provider_id, agent_name=agent)
 
 
 @app.post("/api/proxy/providers/{provider_id}/test")
@@ -905,31 +937,32 @@ def api_proxy_provider_models(provider_id: int):
 
 
 @app.get("/api/proxy/mappings")
-def api_proxy_mappings():
-    return {"mappings": list_mappings()}
+def api_proxy_mappings(agent: str = Query("hermes")):
+    return {"mappings": list_mappings(agent_name=agent)}
 
 
 @app.post("/api/proxy/mappings")
 def api_proxy_save_mapping(body: ProxyMappingBody):
     upsert_mapping(
+        agent_name=body.agent_name,
         source_model=body.source_model.strip(),
         target_model=body.target_model.strip(),
         provider_id=body.provider_id,
         enabled=body.enabled,
         mapping_id=body.id,
     )
-    return {"ok": True, "mappings": list_mappings()}
+    return {"ok": True, "mappings": list_mappings(agent_name=body.agent_name)}
 
 
 @app.delete("/api/proxy/mappings/{mapping_id}")
-def api_proxy_delete_mapping(mapping_id: int):
-    delete_mapping(mapping_id)
-    return {"ok": True, "mappings": list_mappings()}
+def api_proxy_delete_mapping(mapping_id: int, agent: str = Query("hermes")):
+    delete_mapping(mapping_id, agent_name=agent)
+    return {"ok": True, "mappings": list_mappings(agent_name=agent)}
 
 
 @app.post("/api/proxy/mappings/{mapping_id}/toggle")
-def api_proxy_toggle_mapping(mapping_id: int):
-    return toggle_mapping(mapping_id)
+def api_proxy_toggle_mapping(mapping_id: int, agent: str = Query("hermes")):
+    return toggle_mapping(mapping_id, agent_name=agent)
 
 
 @app.get("/api/proxy/logs")
@@ -962,8 +995,8 @@ def api_proxy_sync_agent(agent_name: str, body: ProxyEnabledBody):
 
 
 @app.get("/api/proxy/active-mapping")
-def api_proxy_get_active_mapping():
-    return get_active_mapping()
+def api_proxy_get_active_mapping(agent: str = Query("hermes")):
+    return get_active_mapping(agent)
 
 
 @app.post("/api/proxy/active-mapping")
@@ -975,25 +1008,27 @@ def api_proxy_set_active_mapping(body: ProxyActiveMappingBody):
             provider_id=body.provider_id,
             mode=body.mode,
             mapping_id=body.mapping_id,
+            agent_name=body.agent_name,
         ),
     }
 
 
 @app.get("/api/proxy/last-mappings")
-def api_proxy_last_mappings():
+def api_proxy_last_mappings(agent: str = Query("hermes")):
     """返回所有供应商的上次使用映射 {provider_id: mapping_id}。"""
     from hermes_token_dash.proxy_db import connect as _connect, get_last_mapping_id
     result = {}
     with _connect() as conn:
-        rows = conn.execute("SELECT id FROM proxy_providers").fetchall()
+        rows = conn.execute("SELECT id FROM proxy_providers WHERE agent_name = ?", (agent,)).fetchall()
     for row in rows:
-        mid = get_last_mapping_id(row["id"])
+        mid = get_last_mapping_id(row["id"], agent_name=agent)
         if mid:
             result[str(row["id"])] = mid
     return {"last_mappings": result}
 
 
 class ProxyLastMappingBody(BaseModel):
+    agent_name: str = "hermes"
     provider_id: int
     mapping_id: int
 
@@ -1001,7 +1036,7 @@ class ProxyLastMappingBody(BaseModel):
 @app.post("/api/proxy/last-mapping")
 def api_proxy_set_last_mapping(body: ProxyLastMappingBody):
     from hermes_token_dash.proxy_db import set_last_mapping_id
-    set_last_mapping_id(body.provider_id, body.mapping_id)
+    set_last_mapping_id(body.provider_id, body.mapping_id, agent_name=body.agent_name)
     return {"ok": True}
 
 
@@ -1056,9 +1091,9 @@ async def proxy_chat_completions(request: Request):
     request_model = str(body.get("model") or "")
     auth_header = _request_auth_header(request)
     if proxy_enabled:
-        target_model, provider = _select_chat_provider(request_model, auth_header)
+        target_model, provider = _select_chat_provider(request_model, auth_header, "hermes")
     else:
-        target_model, provider = _select_disabled_chat_provider(request_model, auth_header)
+        target_model, provider = _select_disabled_chat_provider(request_model, auth_header, "hermes")
     if not provider:
         if proxy_enabled:
             return _openai_error("No enabled proxy provider configured", 400)
@@ -1116,9 +1151,9 @@ async def proxy_anthropic_messages(request: Request):
     request_model = str(body.get("model") or "")
     auth_header = _request_auth_header(request)
     if proxy_enabled:
-        target_model, provider = _select_chat_provider(request_model, auth_header)
+        target_model, provider = _select_chat_provider(request_model, auth_header, "claude_code")
     else:
-        target_model, provider = _select_disabled_chat_provider(request_model, auth_header)
+        target_model, provider = _select_disabled_chat_provider(request_model, auth_header, "claude_code")
 
     created_at = int(time.time())
     start_ts = time.perf_counter()

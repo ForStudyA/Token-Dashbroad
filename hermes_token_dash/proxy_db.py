@@ -26,6 +26,7 @@ DB_PATH = DATA_DIR / "token-dashboard.db"
 @dataclass
 class ProviderConfig:
     id: int
+    agent_name: str
     name: str
     base_url: str
     api_key: str
@@ -63,15 +64,18 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
         _DDL: list[str] = [
             """CREATE TABLE IF NOT EXISTS proxy_providers (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
+                agent_name TEXT NOT NULL DEFAULT 'hermes',
+                name TEXT NOT NULL,
                 base_url TEXT NOT NULL,
                 api_key TEXT NOT NULL DEFAULT '',
                 enabled INTEGER NOT NULL DEFAULT 1,
                 created_at INTEGER NOT NULL,
-                updated_at INTEGER NOT NULL
+                updated_at INTEGER NOT NULL,
+                UNIQUE(agent_name, name)
             )""",
             """CREATE TABLE IF NOT EXISTS model_mappings (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL DEFAULT 'hermes',
                 source_model TEXT NOT NULL,
                 target_model TEXT NOT NULL,
                 provider_id INTEGER NOT NULL,
@@ -148,6 +152,47 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
             conn.execute("SELECT protected FROM model_mappings LIMIT 1")
         except Exception:
             conn.execute("ALTER TABLE model_mappings ADD COLUMN protected INTEGER NOT NULL DEFAULT 0")
+        try:
+            provider_cols = {row[1] for row in conn.execute("PRAGMA table_info(proxy_providers)").fetchall()}
+            if "agent_name" not in provider_cols:
+                conn.executescript("""
+                    CREATE TABLE proxy_providers_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        agent_name TEXT NOT NULL DEFAULT 'hermes',
+                        name TEXT NOT NULL,
+                        base_url TEXT NOT NULL,
+                        api_key TEXT NOT NULL DEFAULT '',
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        created_at INTEGER NOT NULL,
+                        updated_at INTEGER NOT NULL,
+                        UNIQUE(agent_name, name)
+                    );
+                    INSERT INTO proxy_providers_new
+                        (id, agent_name, name, base_url, api_key, enabled, created_at, updated_at)
+                    SELECT id, 'hermes', name, base_url, api_key, enabled, created_at, updated_at
+                      FROM proxy_providers;
+                    DROP TABLE proxy_providers;
+                    ALTER TABLE proxy_providers_new RENAME TO proxy_providers;
+                """)
+            else:
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_proxy_providers_agent_name ON proxy_providers(agent_name, name)")
+        except Exception:
+            pass
+        try:
+            mapping_cols = {row[1] for row in conn.execute("PRAGMA table_info(model_mappings)").fetchall()}
+            if "agent_name" not in mapping_cols:
+                conn.execute("ALTER TABLE model_mappings ADD COLUMN agent_name TEXT NOT NULL DEFAULT 'hermes'")
+                conn.execute(
+                    """
+                    UPDATE model_mappings
+                       SET agent_name = COALESCE(
+                           (SELECT agent_name FROM proxy_providers WHERE proxy_providers.id = model_mappings.provider_id),
+                           'hermes'
+                       )
+                    """
+                )
+        except Exception:
+            pass
         # 自动创建"原样转发"映射（如果不存在）
         try:
             default_p = conn.execute("SELECT id FROM proxy_providers WHERE enabled=1 LIMIT 1").fetchone()
@@ -173,11 +218,23 @@ def now_epoch() -> int:
     return int(time.time())
 
 
-def list_providers(include_key: bool = False) -> list[dict[str, Any]]:
+def normalize_agent_name(agent_name: str = "hermes") -> str:
+    value = (agent_name or "hermes").strip()
+    return value or "hermes"
+
+
+def _agent_setting_key(key: str, agent_name: str) -> str:
+    agent_name = normalize_agent_name(agent_name)
+    return key if agent_name == "hermes" else f"{key}_{agent_name}"
+
+
+def list_providers(include_key: bool = False, agent_name: str = "hermes") -> list[dict[str, Any]]:
+    agent_name = normalize_agent_name(agent_name)
     with closing(connect()) as conn:
         rows = conn.execute(
-            "SELECT id, name, base_url, api_key, enabled, created_at, updated_at "
-            "FROM proxy_providers ORDER BY id"
+            "SELECT id, agent_name, name, base_url, api_key, enabled, created_at, updated_at "
+            "FROM proxy_providers WHERE agent_name = ? ORDER BY id",
+            (agent_name,),
         ).fetchall()
     result = []
     for row in rows:
@@ -249,14 +306,14 @@ def _set_setting(key: str, value: str) -> None:
         conn.commit()
 
 
-def get_last_mapping_id(provider_id: int) -> int:
+def get_last_mapping_id(provider_id: int, agent_name: str = "hermes") -> int:
     """返回供应商上次使用的映射 ID，0 表示无记录。"""
-    val = _get_setting(f"last_mapping_{provider_id}")
+    val = _get_setting(f"last_mapping_{normalize_agent_name(agent_name)}_{provider_id}")
     return int(val) if val else 0
 
 
-def set_last_mapping_id(provider_id: int, mapping_id: int) -> None:
-    _set_setting(f"last_mapping_{provider_id}", str(mapping_id))
+def set_last_mapping_id(provider_id: int, mapping_id: int, agent_name: str = "hermes") -> None:
+    _set_setting(f"last_mapping_{normalize_agent_name(agent_name)}_{provider_id}", str(mapping_id))
 
 
 def get_default_model() -> str:
@@ -269,18 +326,25 @@ def set_default_model(model: str) -> dict[str, Any]:
     return {"default_model": model.strip()}
 
 
-def get_active_mapping() -> dict[str, Any]:
+def get_active_mapping(agent_name: str = "hermes") -> dict[str, Any]:
     """Return the single active proxy configuration.
 
     ``mode`` is one of ``mapping``, ``passthrough``, or ``""``.  Legacy
     ``active_model``/``active_provider_id`` settings are still understood so
     existing installs do not lose their selected mapping after upgrade.
     """
-    mode = _get_setting("active_proxy_mode")
-    mapping_id = _get_setting("active_mapping_id")
-    model = _get_setting("active_model")
-    pid = _get_setting("active_provider_id")
+    agent_name = normalize_agent_name(agent_name)
+    mode = _get_setting(_agent_setting_key("active_proxy_mode", agent_name))
+    mapping_id = _get_setting(_agent_setting_key("active_mapping_id", agent_name))
+    model = _get_setting(_agent_setting_key("active_model", agent_name))
+    pid = _get_setting(_agent_setting_key("active_provider_id", agent_name))
+    if agent_name == "hermes" and not any((mode, mapping_id, model, pid)):
+        mode = _get_setting("active_proxy_mode")
+        mapping_id = _get_setting("active_mapping_id")
+        model = _get_setting("active_model")
+        pid = _get_setting("active_provider_id")
     result = {
+        "agent_name": agent_name,
         "mode": mode,
         "target_model": model,
         "provider_id": int(pid) if pid else 0,
@@ -294,10 +358,10 @@ def get_active_mapping() -> dict[str, Any]:
                 SELECT m.id, m.target_model, m.provider_id
                   FROM model_mappings m
                   JOIN proxy_providers p ON p.id = m.provider_id
-                 WHERE m.id = ? AND m.protected = 0 AND p.enabled = 1
+                 WHERE m.id = ? AND m.protected = 0 AND p.enabled = 1 AND m.agent_name = ?
                  LIMIT 1
                 """,
-                (result["mapping_id"],),
+                (result["mapping_id"], agent_name),
             ).fetchone()
         if row:
             result.update(
@@ -308,7 +372,7 @@ def get_active_mapping() -> dict[str, Any]:
                 }
             )
             return result
-        return _clear_active_proxy()
+        return _clear_active_proxy(agent_name)
 
     if result["mode"] == "passthrough":
         provider = get_provider(result["provider_id"]) if result["provider_id"] else None
@@ -316,7 +380,7 @@ def get_active_mapping() -> dict[str, Any]:
             result["target_model"] = ""
             result["mapping_id"] = 0
             return result
-        return _clear_active_proxy()
+        return _clear_active_proxy(agent_name)
 
     if result["target_model"] and result["provider_id"]:
         # Legacy active mapping.  Try to attach the matching mapping row.
@@ -326,11 +390,11 @@ def get_active_mapping() -> dict[str, Any]:
                 SELECT m.id
                   FROM model_mappings m
                   JOIN proxy_providers p ON p.id = m.provider_id
-                 WHERE m.target_model = ? AND m.provider_id = ? AND m.protected = 0 AND p.enabled = 1
+                 WHERE m.target_model = ? AND m.provider_id = ? AND m.protected = 0 AND p.enabled = 1 AND m.agent_name = ?
                  ORDER BY id DESC
                  LIMIT 1
                 """,
-                (result["target_model"], result["provider_id"]),
+                (result["target_model"], result["provider_id"], agent_name),
             ).fetchone()
         result["mode"] = "mapping"
         result["mapping_id"] = int(row["id"]) if row else 0
@@ -341,10 +405,11 @@ def get_active_mapping() -> dict[str, Any]:
             """
             SELECT provider_id
               FROM model_mappings
-             WHERE protected = 1 AND enabled = 1
+             WHERE protected = 1 AND enabled = 1 AND agent_name = ?
              ORDER BY id
              LIMIT 1
-            """
+            """,
+            (agent_name,),
         ).fetchone()
     provider = get_provider(int(row["provider_id"])) if row else None
     if provider and provider.enabled:
@@ -367,12 +432,15 @@ def _write_active_proxy(
     provider_id: int = 0,
     mapping_id: int = 0,
     target_model: str = "",
+    agent_name: str = "hermes",
 ) -> dict[str, Any]:
-    _set_setting("active_proxy_mode", mode)
-    _set_setting("active_provider_id", str(provider_id) if provider_id else "")
-    _set_setting("active_mapping_id", str(mapping_id) if mapping_id else "")
-    _set_setting("active_model", target_model.strip())
+    agent_name = normalize_agent_name(agent_name)
+    _set_setting(_agent_setting_key("active_proxy_mode", agent_name), mode)
+    _set_setting(_agent_setting_key("active_provider_id", agent_name), str(provider_id) if provider_id else "")
+    _set_setting(_agent_setting_key("active_mapping_id", agent_name), str(mapping_id) if mapping_id else "")
+    _set_setting(_agent_setting_key("active_model", agent_name), target_model.strip())
     return {
+        "agent_name": agent_name,
         "mode": mode,
         "target_model": target_model.strip(),
         "provider_id": provider_id,
@@ -380,11 +448,12 @@ def _write_active_proxy(
     }
 
 
-def _clear_active_proxy() -> dict[str, Any]:
+def _clear_active_proxy(agent_name: str = "hermes") -> dict[str, Any]:
+    agent_name = normalize_agent_name(agent_name)
     with closing(connect()) as conn:
-        conn.execute("UPDATE model_mappings SET enabled = 0")
+        conn.execute("UPDATE model_mappings SET enabled = 0 WHERE agent_name = ?", (agent_name,))
         conn.commit()
-    return _write_active_proxy("")
+    return _write_active_proxy("", agent_name=agent_name)
 
 
 def set_active_mapping(
@@ -392,6 +461,7 @@ def set_active_mapping(
     provider_id: int = 0,
     mode: str = "mapping",
     mapping_id: int = 0,
+    agent_name: str = "hermes",
 ) -> dict[str, Any]:
     """Set the single active proxy.
 
@@ -400,25 +470,26 @@ def set_active_mapping(
     disables all concrete proxy routes.
     """
     mode = (mode or "").strip()
+    agent_name = normalize_agent_name(agent_name)
     target_model = target_model.strip()
     provider_id = int(provider_id or 0)
     mapping_id = int(mapping_id or 0)
 
     with closing(connect()) as conn:
-        conn.execute("UPDATE model_mappings SET enabled = 0")
+        conn.execute("UPDATE model_mappings SET enabled = 0 WHERE agent_name = ?", (agent_name,))
         if not mode:
             conn.commit()
-            return _write_active_proxy("")
+            return _write_active_proxy("", agent_name=agent_name)
 
         if mode == "passthrough":
             provider = conn.execute(
-                "SELECT id FROM proxy_providers WHERE id = ? AND enabled = 1", (provider_id,)
+                "SELECT id FROM proxy_providers WHERE id = ? AND enabled = 1 AND agent_name = ?", (provider_id, agent_name)
             ).fetchone()
             if not provider:
                 conn.commit()
-                return _write_active_proxy("")
+                return _write_active_proxy("", agent_name=agent_name)
             conn.commit()
-            return _write_active_proxy("passthrough", provider_id=provider_id)
+            return _write_active_proxy("passthrough", provider_id=provider_id, agent_name=agent_name)
 
         if mode == "mapping":
             if mapping_id:
@@ -427,10 +498,10 @@ def set_active_mapping(
                     SELECT m.id, m.target_model, m.provider_id
                       FROM model_mappings m
                       JOIN proxy_providers p ON p.id = m.provider_id
-                     WHERE m.id = ? AND m.protected = 0 AND p.enabled = 1
+                     WHERE m.id = ? AND m.protected = 0 AND p.enabled = 1 AND m.agent_name = ?
                      LIMIT 1
                     """,
-                    (mapping_id,),
+                    (mapping_id, agent_name),
                 ).fetchone()
             else:
                 row = conn.execute(
@@ -438,15 +509,15 @@ def set_active_mapping(
                     SELECT m.id, m.target_model, m.provider_id
                       FROM model_mappings m
                       JOIN proxy_providers p ON p.id = m.provider_id
-                     WHERE m.target_model = ? AND m.provider_id = ? AND m.protected = 0 AND p.enabled = 1
+                     WHERE m.target_model = ? AND m.provider_id = ? AND m.protected = 0 AND p.enabled = 1 AND m.agent_name = ?
                      ORDER BY id DESC
                      LIMIT 1
                     """,
-                    (target_model, provider_id),
+                    (target_model, provider_id, agent_name),
                 ).fetchone()
             if not row:
                 conn.commit()
-                return _write_active_proxy("")
+                return _write_active_proxy("", agent_name=agent_name)
             conn.execute(
                 "UPDATE model_mappings SET enabled = 1, updated_at = ? WHERE id = ?",
                 (now_epoch(), row["id"]),
@@ -457,9 +528,10 @@ def set_active_mapping(
                 provider_id=int(row["provider_id"]),
                 mapping_id=int(row["id"]),
                 target_model=row["target_model"],
+                agent_name=agent_name,
             )
 
-    return _write_active_proxy("")
+    return _write_active_proxy("", agent_name=agent_name)
 
 
 def upsert_provider(
@@ -468,29 +540,31 @@ def upsert_provider(
     api_key: str,
     enabled: bool = True,
     provider_id: int | None = None,
+    agent_name: str = "hermes",
 ) -> dict[str, Any]:
     ts = now_epoch()
+    agent_name = normalize_agent_name(agent_name)
     with closing(connect()) as conn:
         if provider_id:
             old = conn.execute(
-                "SELECT api_key FROM proxy_providers WHERE id = ?", (provider_id,)
+                "SELECT api_key FROM proxy_providers WHERE id = ? AND agent_name = ?", (provider_id, agent_name)
             ).fetchone()
             key = api_key if api_key else (old["api_key"] if old else "")
             conn.execute(
                 """
                 UPDATE proxy_providers
                    SET name = ?, base_url = ?, api_key = ?, enabled = ?, updated_at = ?
-                 WHERE id = ?
+                 WHERE id = ? AND agent_name = ?
                 """,
-                (name, base_url, key, int(enabled), ts, provider_id),
+                (name, base_url, key, int(enabled), ts, provider_id, agent_name),
             )
         else:
             conn.execute(
                 """
                 INSERT INTO proxy_providers
-                    (name, base_url, api_key, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(name) DO UPDATE SET
+                    (agent_name, name, base_url, api_key, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(agent_name, name) DO UPDATE SET
                     base_url = excluded.base_url,
                     api_key = CASE
                         WHEN excluded.api_key = '' THEN proxy_providers.api_key
@@ -499,7 +573,7 @@ def upsert_provider(
                     enabled = excluded.enabled,
                     updated_at = excluded.updated_at
                 """,
-                (name, base_url, api_key, int(enabled), ts, ts),
+                (agent_name, name, base_url, api_key, int(enabled), ts, ts),
             )
         conn.commit()
     return {"ok": True}
@@ -508,36 +582,39 @@ def upsert_provider(
 def get_provider(provider_id: int) -> ProviderConfig | None:
     with closing(connect()) as conn:
         row = conn.execute(
-            "SELECT id, name, base_url, api_key, enabled FROM proxy_providers WHERE id = ?",
+            "SELECT id, agent_name, name, base_url, api_key, enabled FROM proxy_providers WHERE id = ?",
             (provider_id,),
         ).fetchone()
     return _provider_from_row(row) if row else None
 
 
-def get_provider_by_name(name: str) -> ProviderConfig | None:
+def get_provider_by_name(name: str, agent_name: str = "hermes") -> ProviderConfig | None:
+    agent_name = normalize_agent_name(agent_name)
     with closing(connect()) as conn:
         row = conn.execute(
             """
-            SELECT id, name, base_url, api_key, enabled
+            SELECT id, agent_name, name, base_url, api_key, enabled
               FROM proxy_providers
-             WHERE lower(name) = lower(?)
+             WHERE lower(name) = lower(?) AND agent_name = ?
              LIMIT 1
             """,
-            (name,),
+            (name, agent_name),
         ).fetchone()
     return _provider_from_row(row) if row else None
 
 
-def get_default_provider() -> ProviderConfig | None:
+def get_default_provider(agent_name: str = "hermes") -> ProviderConfig | None:
+    agent_name = normalize_agent_name(agent_name)
     with closing(connect()) as conn:
         row = conn.execute(
             """
-            SELECT id, name, base_url, api_key, enabled
+            SELECT id, agent_name, name, base_url, api_key, enabled
               FROM proxy_providers
-             WHERE enabled = 1
+             WHERE enabled = 1 AND agent_name = ?
              ORDER BY id
              LIMIT 1
-            """
+            """,
+            (agent_name,),
         ).fetchone()
     return _provider_from_row(row) if row else None
 
@@ -545,6 +622,7 @@ def get_default_provider() -> ProviderConfig | None:
 def _provider_from_row(row: sqlite3.Row) -> ProviderConfig:
     return ProviderConfig(
         id=int(row["id"]),
+        agent_name=row["agent_name"],
         name=row["name"],
         base_url=row["base_url"],
         api_key=row["api_key"],
@@ -552,75 +630,82 @@ def _provider_from_row(row: sqlite3.Row) -> ProviderConfig:
     )
 
 
-def delete_provider(provider_id: int) -> dict[str, Any]:
-    active = get_active_mapping()
+def delete_provider(provider_id: int, agent_name: str = "hermes") -> dict[str, Any]:
+    agent_name = normalize_agent_name(agent_name)
+    active = get_active_mapping(agent_name)
     with closing(connect()) as conn:
-        conn.execute("DELETE FROM model_mappings WHERE provider_id = ?", (provider_id,))
-        conn.execute("DELETE FROM proxy_providers WHERE id = ?", (provider_id,))
+        conn.execute("DELETE FROM model_mappings WHERE provider_id = ? AND agent_name = ?", (provider_id, agent_name))
+        conn.execute("DELETE FROM proxy_providers WHERE id = ? AND agent_name = ?", (provider_id, agent_name))
         conn.commit()
     if active["provider_id"] == provider_id:
-        _clear_active_proxy()
+        _clear_active_proxy(agent_name)
     return {"ok": True}
 
 
-def toggle_provider(provider_id: int) -> dict[str, Any]:
-    active = get_active_mapping()
+def toggle_provider(provider_id: int, agent_name: str = "hermes") -> dict[str, Any]:
+    agent_name = normalize_agent_name(agent_name)
+    active = get_active_mapping(agent_name)
     ts = now_epoch()
     with closing(connect()) as conn:
-        row = conn.execute("SELECT enabled FROM proxy_providers WHERE id = ?", (provider_id,)).fetchone()
+        row = conn.execute("SELECT enabled FROM proxy_providers WHERE id = ? AND agent_name = ?", (provider_id, agent_name)).fetchone()
         if not row:
             return {"ok": False, "error": "Provider not found"}
         new_val = 0 if row["enabled"] else 1
-        conn.execute("UPDATE proxy_providers SET enabled = ?, updated_at = ? WHERE id = ?", (new_val, ts, provider_id))
+        conn.execute("UPDATE proxy_providers SET enabled = ?, updated_at = ? WHERE id = ? AND agent_name = ?", (new_val, ts, provider_id, agent_name))
         conn.commit()
     if not new_val and active["provider_id"] == provider_id:
-        _clear_active_proxy()
+        _clear_active_proxy(agent_name)
     return {"ok": True, "enabled": bool(new_val)}
 
 
-def toggle_mapping(mapping_id: int) -> dict[str, Any]:
+def toggle_mapping(mapping_id: int, agent_name: str = "hermes") -> dict[str, Any]:
+    agent_name = normalize_agent_name(agent_name)
     row = None
     with closing(connect()) as conn:
         row = conn.execute(
             """
             SELECT id, target_model, provider_id, enabled, protected
               FROM model_mappings
-             WHERE id = ?
+             WHERE id = ? AND agent_name = ?
             """,
-            (mapping_id,),
+            (mapping_id, agent_name),
         ).fetchone()
     if not row:
         return {"ok": False, "error": "Mapping not found"}
     if row["protected"]:
-        return set_active_mapping(mode="passthrough", provider_id=int(row["provider_id"]))
+        return set_active_mapping(mode="passthrough", provider_id=int(row["provider_id"]), agent_name=agent_name)
     if row["enabled"]:
-        return {"ok": True, **_clear_active_proxy()}
-    return {"ok": True, **set_active_mapping(mode="mapping", mapping_id=int(row["id"]))}
+        return {"ok": True, **_clear_active_proxy(agent_name)}
+    return {"ok": True, **set_active_mapping(mode="mapping", mapping_id=int(row["id"]), agent_name=agent_name)}
 
 
-def delete_mapping(mapping_id: int) -> dict[str, Any]:
-    active = get_active_mapping()
+def delete_mapping(mapping_id: int, agent_name: str = "hermes") -> dict[str, Any]:
+    agent_name = normalize_agent_name(agent_name)
+    active = get_active_mapping(agent_name)
     with closing(connect()) as conn:
-        row = conn.execute("SELECT protected FROM model_mappings WHERE id = ?", (mapping_id,)).fetchone()
+        row = conn.execute("SELECT protected FROM model_mappings WHERE id = ? AND agent_name = ?", (mapping_id, agent_name)).fetchone()
         if row and row["protected"]:
             return {"ok": False, "error": "Cannot delete protected mapping"}
-        conn.execute("DELETE FROM model_mappings WHERE id = ?", (mapping_id,))
+        conn.execute("DELETE FROM model_mappings WHERE id = ? AND agent_name = ?", (mapping_id, agent_name))
         conn.commit()
     if active["mapping_id"] == mapping_id:
-        _clear_active_proxy()
+        _clear_active_proxy(agent_name)
     return {"ok": True}
 
 
-def list_mappings() -> list[dict[str, Any]]:
+def list_mappings(agent_name: str = "hermes") -> list[dict[str, Any]]:
+    agent_name = normalize_agent_name(agent_name)
     with closing(connect()) as conn:
         rows = conn.execute(
             """
-            SELECT m.id, m.source_model, m.target_model, m.provider_id,
+            SELECT m.id, m.agent_name, m.source_model, m.target_model, m.provider_id,
                    p.name AS provider_name, m.enabled, m.protected, m.created_at, m.updated_at
               FROM model_mappings m
               JOIN proxy_providers p ON p.id = m.provider_id
+             WHERE m.agent_name = ?
              ORDER BY m.protected DESC, m.source_model
-            """
+            """,
+            (agent_name,),
         ).fetchall()
     result = []
     for row in rows:
@@ -637,12 +722,14 @@ def upsert_mapping(
     provider_id: int,
     enabled: bool = True,
     mapping_id: int | None = None,
+    agent_name: str = "hermes",
 ) -> dict[str, Any]:
     ts = now_epoch()
+    agent_name = normalize_agent_name(agent_name)
     with closing(connect()) as conn:
         if mapping_id:
             old = conn.execute(
-                "SELECT enabled FROM model_mappings WHERE id = ?", (mapping_id,)
+                "SELECT enabled FROM model_mappings WHERE id = ? AND agent_name = ?", (mapping_id, agent_name)
             ).fetchone()
             current_enabled = int(old["enabled"]) if old else 0
             conn.execute(
@@ -650,25 +737,25 @@ def upsert_mapping(
                 UPDATE model_mappings
                    SET source_model = ?, target_model = ?, provider_id = ?,
                        enabled = ?, updated_at = ?
-                 WHERE id = ?
+                 WHERE id = ? AND agent_name = ?
                 """,
-                (source_model, target_model, provider_id, current_enabled, ts, mapping_id),
+                (source_model, target_model, provider_id, current_enabled, ts, mapping_id, agent_name),
             )
         else:
             conn.execute(
                 """
                 INSERT INTO model_mappings
-                    (source_model, target_model, provider_id, enabled, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (agent_name, source_model, target_model, provider_id, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (source_model, target_model, provider_id, 0, ts, ts),
+                (agent_name, source_model, target_model, provider_id, 0, ts, ts),
             )
         conn.commit()
     return {"ok": True}
 
 
-def resolve_mapping(request_model: str) -> tuple[str, ProviderConfig] | None:
-    active = get_active_mapping()
+def resolve_mapping(request_model: str, agent_name: str = "hermes") -> tuple[str, ProviderConfig] | None:
+    active = get_active_mapping(agent_name)
     provider_id = int(active.get("provider_id") or 0)
     if not active.get("mode") or not provider_id:
         return None

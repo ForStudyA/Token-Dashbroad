@@ -992,6 +992,159 @@ class TestHermesProxyPassthrough:
         assert active["mode"] == ""
         assert active["provider_id"] == 0
 
+    def test_proxy_provider_and_active_mapping_are_agent_scoped(self, monkeypatch, tmp_path, client):
+        from hermes_token_dash import proxy_db as pdb
+
+        data_dir = tmp_path / "token-dashboard"
+        monkeypatch.setattr(pdb, "DATA_DIR", data_dir)
+        monkeypatch.setattr(pdb, "DB_PATH", data_dir / "token-dashboard.db")
+
+        hermes_response = client.post(
+            "/api/proxy/providers",
+            json={
+                "agent_name": "hermes",
+                "name": "shared",
+                "base_url": "http://hermes-provider.test/v1",
+                "api_key": "hermes-key",
+                "enabled": True,
+            },
+        )
+        claude_response = client.post(
+            "/api/proxy/providers",
+            json={
+                "agent_name": "claude_code",
+                "name": "shared",
+                "base_url": "http://claude-provider.test/v1",
+                "api_key": "claude-key",
+                "enabled": True,
+            },
+        )
+        assert hermes_response.status_code == 200
+        assert claude_response.status_code == 200
+
+        hermes_providers = client.get("/api/proxy/providers?agent=hermes").json()["providers"]
+        claude_providers = client.get("/api/proxy/providers?agent=claude_code").json()["providers"]
+        assert [p["base_url"] for p in hermes_providers] == ["http://hermes-provider.test/v1"]
+        assert [p["base_url"] for p in claude_providers] == ["http://claude-provider.test/v1"]
+
+        claude_provider_id = claude_providers[0]["id"]
+        client.post(
+            "/api/proxy/active-mapping",
+            json={
+                "agent_name": "claude_code",
+                "mode": "passthrough",
+                "provider_id": claude_provider_id,
+            },
+        )
+
+        hermes_active = client.get("/api/proxy/active-mapping?agent=hermes").json()
+        claude_active = client.get("/api/proxy/active-mapping?agent=claude_code").json()
+        assert hermes_active["mode"] == ""
+        assert hermes_active["provider_id"] == 0
+        assert claude_active["mode"] == "passthrough"
+        assert claude_active["provider_id"] == claude_provider_id
+
+    def test_stale_active_provider_id_cannot_cross_agent(self, monkeypatch, tmp_path):
+        from hermes_token_dash import proxy_db as pdb
+        from hermes_token_dash import server as srv
+
+        data_dir = tmp_path / "token-dashboard"
+        monkeypatch.setattr(pdb, "DATA_DIR", data_dir)
+        monkeypatch.setattr(pdb, "DB_PATH", data_dir / "token-dashboard.db")
+
+        pdb.upsert_provider(
+            agent_name="hermes",
+            name="hermes-only",
+            base_url="http://hermes-provider.test/v1",
+            api_key="hermes-key",
+            enabled=True,
+        )
+        hermes_provider = pdb.get_provider_by_name("hermes-only", agent_name="hermes")
+        with pdb.connect() as conn:
+            ts = pdb.now_epoch()
+            for key, value in {
+                "active_proxy_mode_claude_code": "passthrough",
+                "active_provider_id_claude_code": str(hermes_provider.id),
+            }.items():
+                conn.execute(
+                    """
+                    INSERT INTO proxy_settings (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                    """,
+                    (key, value, ts),
+                )
+            conn.commit()
+
+        target_model, provider = srv._select_chat_provider("claude-3-sonnet", "", "claude_code")
+
+        assert target_model == "claude-3-sonnet"
+        assert provider is None
+
+    def test_chat_completions_uses_hermes_agent_config(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        captured = {}
+        provider = SimpleNamespace(
+            id=1,
+            agent_name="hermes",
+            name="hermes-provider",
+            base_url="http://hermes-provider.test/v1",
+            api_key="key",
+            enabled=True,
+        )
+
+        def fake_select(request_model, auth_header, agent_name="hermes"):
+            captured["agent_name"] = agent_name
+            return request_model, provider
+
+        async def fake_proxy_chat_json(*args, **kwargs):
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "_select_chat_provider", fake_select)
+        monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "request-model", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 200
+        assert captured["agent_name"] == "hermes"
+
+    def test_messages_uses_claude_code_agent_config(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        captured = {}
+        provider = SimpleNamespace(
+            id=2,
+            agent_name="claude_code",
+            name="claude-provider",
+            base_url="http://claude-provider.test/v1",
+            api_key="key",
+            enabled=True,
+        )
+
+        def fake_select(request_model, auth_header, agent_name="hermes"):
+            captured["agent_name"] = agent_name
+            return request_model, provider
+
+        async def fake_proxy_anthropic_json(*args, **kwargs):
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "_select_chat_provider", fake_select)
+        monkeypatch.setattr(srv, "_proxy_anthropic_json", fake_proxy_anthropic_json)
+
+        resp = client.post(
+            "/v1/messages",
+            json={"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+
+        assert resp.status_code == 200
+        assert captured["agent_name"] == "claude_code"
+
     def test_active_mapping_can_remap_mimo_model(self, monkeypatch, client):
         """Active mappings take precedence over the MiMo compatibility fallback."""
         from fastapi.responses import JSONResponse
