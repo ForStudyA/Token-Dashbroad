@@ -87,6 +87,15 @@ _cache_time: float = 0.0
 CACHE_TTL: float = 300.0  # 5 minutes
 _cache_lock = threading.Lock()
 _bg_refreshing = False
+_served_request = False
+
+
+@app.middleware("http")
+async def _mark_served_request(request: Request, call_next):
+    """Remember whether this process actually accepted traffic."""
+    global _served_request
+    _served_request = True
+    return await call_next(request)
 
 
 @app.on_event("startup")
@@ -95,7 +104,7 @@ async def _preload():
     import asyncio
     await asyncio.to_thread(_load_cache)
     if get_proxy_enabled():
-        await asyncio.to_thread(_ensure_agent_configs_match_proxy_state, True)
+        _run_agent_config_task(True, "startup sync", wait_seconds=0)
 
 
 # Incremental file cache: {filepath: (mtime, size, records)}
@@ -268,6 +277,29 @@ def _toggle_agent_configs(enable_proxy: bool) -> None:
             print(f"[token-dashboard] proxy restored for {adapter.display_name}: {'ok' if ok else 'failed'}", flush=True)
 
 
+def _run_agent_config_task(enable_proxy: bool, label: str, wait_seconds: float = 3.0) -> bool:
+    """Run agent config changes without letting slow file/db locks hang the server."""
+    done = threading.Event()
+
+    def worker() -> None:
+        try:
+            _toggle_agent_configs(enable_proxy)
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=worker, daemon=True, name=f"token-dashboard-{label}")
+    thread.start()
+    if wait_seconds <= 0:
+        print(f"[token-dashboard] {label} started in background.", flush=True)
+        return False
+    thread.join(wait_seconds)
+    if done.is_set():
+        print(f"[token-dashboard] {label} finished.", flush=True)
+        return True
+    print(f"[token-dashboard] {label} still running after {wait_seconds:.1f}s; continuing.", flush=True)
+    return False
+
+
 def _is_local_proxy_url(value: str | None) -> bool:
     value = (value or "").lower()
     return "127.0.0.1:8765" in value or "localhost:8765" in value
@@ -293,9 +325,15 @@ def _ensure_agent_configs_match_proxy_state(enable_proxy: bool) -> None:
 async def _restore_agent_configs_on_shutdown():
     """Restore agent configs so a stopped server does not strand agents on localhost."""
     try:
+        if not _served_request:
+            print("[token-dashboard] server stopped before serving requests; skipping agent proxy restore.", flush=True)
+            return
         print("[token-dashboard] server shutting down; restoring agent proxy settings...", flush=True)
-        _toggle_agent_configs(False)
-        print("[token-dashboard] agent proxy settings restored.", flush=True)
+        finished = _run_agent_config_task(False, "shutdown restore", wait_seconds=3)
+        if finished:
+            print("[token-dashboard] agent proxy settings restored.", flush=True)
+        else:
+            print("[token-dashboard] agent proxy restore is still running; server shutdown will continue.", flush=True)
     except Exception:
         print("[token-dashboard] failed to restore one or more agent proxy settings.", flush=True)
 
@@ -363,9 +401,13 @@ def _provider_with_request_auth(provider, auth_header: str):
     )
 
 
+def _provider_enabled(provider) -> bool:
+    return bool(provider and getattr(provider, "enabled", True))
+
+
 def _mimo_provider_from_request(auth_header: str):
     provider = get_provider_by_name("mimo") or get_provider_by_name("xiaomi")
-    if provider:
+    if _provider_enabled(provider):
         return _provider_with_request_auth(provider, auth_header)
     return RuntimeProxyProvider(
         id=None,
@@ -382,7 +424,7 @@ def _select_chat_provider(request_model: str, auth_header: str):
     provider_id = int(active.get("provider_id") or 0)
     if mode and provider_id:
         provider = get_provider(provider_id)
-        if provider:
+        if _provider_enabled(provider):
             if mode == "passthrough":
                 return request_model, provider
             if mode == "mapping" and active.get("target_model"):
@@ -398,7 +440,7 @@ def _select_disabled_chat_provider(request_model: str, auth_header: str):
     if _is_mimo_model(request_model):
         return request_model, _mimo_provider_from_request(auth_header)
     provider = _get_active_provider_for_metadata() or get_default_provider()
-    if provider:
+    if _provider_enabled(provider):
         return request_model, provider
     return request_model, None
 
@@ -538,7 +580,8 @@ def _has_valid_model_list(payload: Any) -> bool:
 def _get_active_provider_for_metadata():
     active = get_active_mapping()
     provider_id = int(active.get("provider_id") or 0)
-    return get_provider(provider_id) if provider_id else None
+    provider = get_provider(provider_id) if provider_id else None
+    return provider if _provider_enabled(provider) else None
 
 
 def _normalize_chat_request_body(body: dict[str, Any], target_model: str) -> dict[str, Any]:
@@ -709,7 +752,6 @@ def api_proxy_logs(limit: int = Query(100, ge=1, le=500)):
 @app.get("/api/proxy/status")
 def api_proxy_status():
     enabled = get_proxy_enabled()
-    _ensure_agent_configs_match_proxy_state(enabled)
     return {"enabled": enabled}
 
 
@@ -717,8 +759,8 @@ def api_proxy_status():
 def api_proxy_save_status(body: ProxyEnabledBody):
     set_proxy_enabled(body.enabled)
     # 代理开关同时切换所有 agent 配置
-    _toggle_agent_configs(body.enabled)
-    return {"ok": True, "enabled": get_proxy_enabled()}
+    synced = _run_agent_config_task(body.enabled, "proxy status sync", wait_seconds=5)
+    return {"ok": True, "enabled": get_proxy_enabled(), "agent_config_synced": synced}
 
 
 @app.get("/api/proxy/active-mapping")

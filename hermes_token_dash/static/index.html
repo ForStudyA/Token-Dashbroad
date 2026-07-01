@@ -326,7 +326,7 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <div class="proxy-panel">
 <div class="proxy-config-section">
 <h2>上游提供商 <button class="btn-muted" style="font-size:11px;margin-left:8px" @click="openProviderModal()">添加提供商</button>
-<button class="proxy-switch" :class="{on:passthroughActive}" :disabled="!selectedProviderId&&!passthroughActive" style="margin-left:12px;font-size:11px" @click="togglePassthrough()"><span class="track"></span><span>原样转发</span></button></h2>
+<button class="proxy-switch" :class="{on:selectedPassthroughActive}" :disabled="!selectedProviderId&&!passthroughActive" style="margin-left:12px;font-size:11px" @click="togglePassthrough()"><span class="track"></span><span>原样转发</span></button></h2>
 <div class="proxy-list" style="margin-top:12px">
 <div class="proxy-item" v-for="p in proxyProviders" :key="p.id" :class="{selected:selectedProviderId===p.id}" @click="selectProvider(p.id)">
 <div><b>{{p.name}}</b><div class="proxy-muted">{{p.base_url}} · {{p.api_key?'已配置 Key':'未配置 Key'}}</div></div>
@@ -530,7 +530,7 @@ function providerInUse(id){return proxyEnabled.value&&activeMapping.value.mode==
 function mappingInUse(m){return proxyEnabled.value&&activeMapping.value.mode==='mapping'&&activeMapping.value.mapping_id===m.id}
 async function toggleProviderEnabled(p){selectProvider(p.id)}
 async function toggleMappingEnabled(m){if(m.protected)return;await fetch('/api/proxy/mappings/'+m.id+'/toggle',{method:'POST'});await fetchProxyConfig()}
-async function togglePassthrough(){if(passthroughActive.value){await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:''})});await fetchProxyConfig();return}if(!selectedProviderId.value)return;await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'passthrough',provider_id:selectedProviderId.value})});await fetchProxyConfig()}
+async function togglePassthrough(){const pid=selectedProviderId.value||activeMapping.value.provider_id;if(selectedPassthroughActive.value){await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:''})});await fetchProxyConfig();return}if(!pid)return;await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'passthrough',provider_id:pid})});selectedProviderId.value=pid;await fetchProxyConfig()}
 function isProviderTesting(id){return !!providerTesting.value[id]}
 async function testProvider(p){if(isProviderTesting(p.id))return;const old=modelMessage.value;providerTesting.value={...providerTesting.value,[p.id]:true};modelMessage.value='测试 '+p.name+'...';try{const r=await fetch('/api/proxy/providers/'+p.id+'/test',{method:'POST'});const d=await r.json();alert((d.ok?'测试成功：':'测试失败：')+(d.message||'')+(d.model_count!=null?'，模型 '+d.model_count+' 个':''))}catch(e){alert('测试失败：'+e)}finally{const next={...providerTesting.value};delete next[p.id];providerTesting.value=next;modelMessage.value=old}}
 function resetModelPicker(){remoteModels.value=[];selectedRemoteModels.value=[];modelMessage.value=''}

@@ -514,6 +514,32 @@ class TestHermesProxyPassthrough:
         assert resp.status_code == 400
         assert "No enabled proxy provider configured" in resp.text
 
+    def test_chat_completion_ignores_disabled_active_provider(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=1,
+            name="disabled",
+            base_url="http://disabled.test/v1",
+            api_key="disabled-key",
+            enabled=False,
+        )
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 1 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "passthrough", "target_model": "", "provider_id": 1, "mapping_id": 0},
+        )
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "hermes-config-model", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 400
+        assert "No enabled proxy provider configured" in resp.text
+
     def test_chat_completion_uses_active_mapping(self, monkeypatch, client):
         from fastapi.responses import JSONResponse
         from hermes_token_dash import server as srv
@@ -942,6 +968,13 @@ class TestHermesProxyPassthrough:
         assert active["mapping_id"] == mapping_b["id"]
         assert active["provider_id"] == provider_ids["p2"]
         assert [m["id"] for m in mappings if m["enabled"] and not m["protected"]] == [mapping_b["id"]]
+
+        client.post(f"/api/proxy/providers/{provider_ids['p2']}/toggle")
+        active = client.get("/api/proxy/active-mapping").json()
+        mappings = client.get("/api/proxy/mappings").json()["mappings"]
+        assert active["mode"] == ""
+        assert active["provider_id"] == 0
+        assert not [m for m in mappings if m["enabled"] and not m["protected"]]
 
         client.post(
             "/api/proxy/active-mapping",

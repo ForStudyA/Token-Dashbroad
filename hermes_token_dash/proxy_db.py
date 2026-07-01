@@ -291,9 +291,10 @@ def get_active_mapping() -> dict[str, Any]:
         with closing(connect()) as conn:
             row = conn.execute(
                 """
-                SELECT id, target_model, provider_id
-                  FROM model_mappings
-                 WHERE id = ? AND protected = 0
+                SELECT m.id, m.target_model, m.provider_id
+                  FROM model_mappings m
+                  JOIN proxy_providers p ON p.id = m.provider_id
+                 WHERE m.id = ? AND m.protected = 0 AND p.enabled = 1
                  LIMIT 1
                 """,
                 (result["mapping_id"],),
@@ -310,7 +311,8 @@ def get_active_mapping() -> dict[str, Any]:
         return _clear_active_proxy()
 
     if result["mode"] == "passthrough":
-        if result["provider_id"] and get_provider(result["provider_id"]):
+        provider = get_provider(result["provider_id"]) if result["provider_id"] else None
+        if provider and provider.enabled:
             result["target_model"] = ""
             result["mapping_id"] = 0
             return result
@@ -321,9 +323,10 @@ def get_active_mapping() -> dict[str, Any]:
         with closing(connect()) as conn:
             row = conn.execute(
                 """
-                SELECT id
-                  FROM model_mappings
-                 WHERE target_model = ? AND provider_id = ? AND protected = 0
+                SELECT m.id
+                  FROM model_mappings m
+                  JOIN proxy_providers p ON p.id = m.provider_id
+                 WHERE m.target_model = ? AND m.provider_id = ? AND m.protected = 0 AND p.enabled = 1
                  ORDER BY id DESC
                  LIMIT 1
                 """,
@@ -343,7 +346,8 @@ def get_active_mapping() -> dict[str, Any]:
              LIMIT 1
             """
         ).fetchone()
-    if row and get_provider(int(row["provider_id"])):
+    provider = get_provider(int(row["provider_id"])) if row else None
+    if provider and provider.enabled:
         return {
             "mode": "passthrough",
             "target_model": "",
@@ -408,7 +412,7 @@ def set_active_mapping(
 
         if mode == "passthrough":
             provider = conn.execute(
-                "SELECT id FROM proxy_providers WHERE id = ?", (provider_id,)
+                "SELECT id FROM proxy_providers WHERE id = ? AND enabled = 1", (provider_id,)
             ).fetchone()
             if not provider:
                 conn.commit()
@@ -420,9 +424,10 @@ def set_active_mapping(
             if mapping_id:
                 row = conn.execute(
                     """
-                    SELECT id, target_model, provider_id
-                      FROM model_mappings
-                     WHERE id = ? AND protected = 0
+                    SELECT m.id, m.target_model, m.provider_id
+                      FROM model_mappings m
+                      JOIN proxy_providers p ON p.id = m.provider_id
+                     WHERE m.id = ? AND m.protected = 0 AND p.enabled = 1
                      LIMIT 1
                     """,
                     (mapping_id,),
@@ -430,9 +435,10 @@ def set_active_mapping(
             else:
                 row = conn.execute(
                     """
-                    SELECT id, target_model, provider_id
-                      FROM model_mappings
-                     WHERE target_model = ? AND provider_id = ? AND protected = 0
+                    SELECT m.id, m.target_model, m.provider_id
+                      FROM model_mappings m
+                      JOIN proxy_providers p ON p.id = m.provider_id
+                     WHERE m.target_model = ? AND m.provider_id = ? AND m.protected = 0 AND p.enabled = 1
                      ORDER BY id DESC
                      LIMIT 1
                     """,
@@ -558,6 +564,7 @@ def delete_provider(provider_id: int) -> dict[str, Any]:
 
 
 def toggle_provider(provider_id: int) -> dict[str, Any]:
+    active = get_active_mapping()
     ts = now_epoch()
     with closing(connect()) as conn:
         row = conn.execute("SELECT enabled FROM proxy_providers WHERE id = ?", (provider_id,)).fetchone()
@@ -566,6 +573,8 @@ def toggle_provider(provider_id: int) -> dict[str, Any]:
         new_val = 0 if row["enabled"] else 1
         conn.execute("UPDATE proxy_providers SET enabled = ?, updated_at = ? WHERE id = ?", (new_val, ts, provider_id))
         conn.commit()
+    if not new_val and active["provider_id"] == provider_id:
+        _clear_active_proxy()
     return {"ok": True, "enabled": bool(new_val)}
 
 
