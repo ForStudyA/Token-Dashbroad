@@ -94,6 +94,8 @@ async def _preload():
     """Pre-load data on startup so first request is instant."""
     import asyncio
     await asyncio.to_thread(_load_cache)
+    if get_proxy_enabled():
+        await asyncio.to_thread(_ensure_agent_configs_match_proxy_state, True)
 
 
 # Incremental file cache: {filepath: (mtime, size, records)}
@@ -259,8 +261,31 @@ def _toggle_agent_configs(enable_proxy: bool) -> None:
         if not adapter.is_installed():
             continue
         if enable_proxy:
-            adapter.set_proxy_url(PROXY_URL)
+            ok = adapter.set_proxy_url(PROXY_URL)
+            print(f"[token-dashboard] proxy enabled for {adapter.display_name}: {'ok' if ok else 'failed'}", flush=True)
         else:
+            ok = adapter.restore_original()
+            print(f"[token-dashboard] proxy restored for {adapter.display_name}: {'ok' if ok else 'failed'}", flush=True)
+
+
+def _is_local_proxy_url(value: str | None) -> bool:
+    value = (value or "").lower()
+    return "127.0.0.1:8765" in value or "localhost:8765" in value
+
+
+def _ensure_agent_configs_match_proxy_state(enable_proxy: bool) -> None:
+    """Repair stale agent configs when persisted proxy state and files diverge."""
+    from hermes_token_dash.adapters import ADAPTERS
+
+    for name, cls in ADAPTERS.items():
+        adapter = cls()
+        if not adapter.is_installed():
+            continue
+        current_url = adapter.get_current_base_url()
+        is_proxy_url = _is_local_proxy_url(current_url)
+        if enable_proxy and not is_proxy_url:
+            adapter.set_proxy_url(PROXY_URL)
+        elif not enable_proxy and is_proxy_url:
             adapter.restore_original()
 
 
@@ -268,9 +293,11 @@ def _toggle_agent_configs(enable_proxy: bool) -> None:
 async def _restore_agent_configs_on_shutdown():
     """Restore agent configs so a stopped server does not strand agents on localhost."""
     try:
+        print("[token-dashboard] server shutting down; restoring agent proxy settings...", flush=True)
         _toggle_agent_configs(False)
+        print("[token-dashboard] agent proxy settings restored.", flush=True)
     except Exception:
-        pass
+        print("[token-dashboard] failed to restore one or more agent proxy settings.", flush=True)
 
 
 def _upstream_chat_url(base_url: str) -> str:
@@ -324,7 +351,7 @@ def _is_mimo_model(model: str) -> bool:
 
 
 def _provider_with_request_auth(provider, auth_header: str):
-    if not auth_header:
+    if not auth_header or getattr(provider, "api_key", ""):
         return provider
     return RuntimeProxyProvider(
         id=provider.id,
@@ -350,24 +377,29 @@ def _mimo_provider_from_request(auth_header: str):
 
 def _select_chat_provider(request_model: str, auth_header: str):
     """Resolve the upstream provider/model for an incoming chat request."""
-    if _is_mimo_model(request_model):
-        return request_model, _mimo_provider_from_request(auth_header)
-
     active = get_active_mapping()
     mode = active.get("mode") or ("mapping" if active.get("target_model") else "")
     provider_id = int(active.get("provider_id") or 0)
-    if not mode or not provider_id:
-        return request_model, None
+    if mode and provider_id:
+        provider = get_provider(provider_id)
+        if provider:
+            if mode == "passthrough":
+                return request_model, provider
+            if mode == "mapping" and active.get("target_model"):
+                return str(active["target_model"]), provider
 
-    provider = get_provider(provider_id)
-    if not provider:
-        return request_model, None
-    provider = _provider_with_request_auth(provider, auth_header)
+    if _is_mimo_model(request_model):
+        return request_model, _mimo_provider_from_request(auth_header)
+    return request_model, None
 
-    if mode == "passthrough":
+
+def _select_disabled_chat_provider(request_model: str, auth_header: str):
+    """Best-effort forwarding when a running agent still points at a disabled proxy."""
+    if _is_mimo_model(request_model):
+        return request_model, _mimo_provider_from_request(auth_header)
+    provider = _get_active_provider_for_metadata() or get_default_provider()
+    if provider:
         return request_model, provider
-    if mode == "mapping" and active.get("target_model"):
-        return str(active["target_model"]), provider
     return request_model, None
 
 
@@ -676,7 +708,9 @@ def api_proxy_logs(limit: int = Query(100, ge=1, le=500)):
 
 @app.get("/api/proxy/status")
 def api_proxy_status():
-    return {"enabled": get_proxy_enabled()}
+    enabled = get_proxy_enabled()
+    _ensure_agent_configs_match_proxy_state(enabled)
+    return {"enabled": enabled}
 
 
 @app.post("/api/proxy/status")
@@ -736,7 +770,7 @@ def api_proxy_set_last_mapping(body: ProxyLastMappingBody):
 def proxy_models():
     """Hermes-compatible model list passthrough with a local fallback."""
     if not get_proxy_enabled():
-        return _openai_error("Local proxy is disabled", 503)
+        return _model_list_fallback()
     provider = _get_active_provider_for_metadata()
     if provider:
         return _upstream_get_json(_upstream_models_url(provider.base_url), provider, _model_list_fallback())
@@ -747,7 +781,7 @@ def proxy_models():
 def proxy_model(model_id: str):
     """Hermes-compatible single-model probe passthrough."""
     if not get_proxy_enabled():
-        return _openai_error("Local proxy is disabled", 503)
+        return _model_fallback(model_id)
     provider = _get_active_provider_for_metadata()
     if provider:
         return _upstream_get_json(_upstream_model_url(provider.base_url, model_id), provider, _model_fallback(model_id))
@@ -757,8 +791,6 @@ def proxy_model(model_id: str):
 @app.post("/api/show")
 async def proxy_api_show(request: Request):
     """Ollama-style model probe used by Hermes before chat requests."""
-    if not get_proxy_enabled():
-        return _openai_error("Local proxy is disabled", 503)
     try:
         body = await request.json()
         if not isinstance(body, dict):
@@ -775,8 +807,7 @@ async def proxy_api_show(request: Request):
 @app.post("/v1/chat/completions")
 async def proxy_chat_completions(request: Request):
     """OpenAI-compatible chat completions proxy for Hermes."""
-    if not get_proxy_enabled():
-        return _openai_error("Local proxy is disabled", 503)
+    proxy_enabled = get_proxy_enabled()
     try:
         body = await request.json()
     except Exception:
@@ -784,9 +815,14 @@ async def proxy_chat_completions(request: Request):
 
     request_model = str(body.get("model") or "")
     auth_header = _request_auth_header(request)
-    target_model, provider = _select_chat_provider(request_model, auth_header)
+    if proxy_enabled:
+        target_model, provider = _select_chat_provider(request_model, auth_header)
+    else:
+        target_model, provider = _select_disabled_chat_provider(request_model, auth_header)
     if not provider:
-        return _openai_error("No enabled proxy provider configured", 400)
+        if proxy_enabled:
+            return _openai_error("No enabled proxy provider configured", 400)
+        return _openai_error("No proxy provider configured for compatibility forwarding", 400)
 
     upstream_body = _normalize_chat_request_body(body, target_model)
     is_streaming = bool(upstream_body.get("stream"))
@@ -813,6 +849,7 @@ async def proxy_chat_completions(request: Request):
             target_model,
             created_at,
             start_ts,
+            proxy_enabled,
         )
     return await _proxy_chat_json(
         upstream_url,
@@ -823,6 +860,7 @@ async def proxy_chat_completions(request: Request):
         target_model,
         created_at,
         start_ts,
+        proxy_enabled,
     )
 
 
@@ -835,6 +873,7 @@ async def _proxy_chat_json(
     target_model: str,
     created_at: int,
     start_ts: float,
+    should_log: bool = True,
 ):
     import urllib.error
     import urllib.request
@@ -874,24 +913,25 @@ async def _proxy_chat_json(
             error_message = content.decode("utf-8", errors="ignore")[:1000]
 
     latency_ms = int((time.perf_counter() - start_ts) * 1000)
-    insert_request_log(
-        request_id=request_id,
-        source_app="hermes",
-        provider_id=provider.id,
-        provider_name=provider.name,
-        endpoint="/v1/chat/completions",
-        request_model=request_model,
-        model=response_model,
-        raw_usage=raw_usage,
-        status_code=status_code,
-        error_message=error_message,
-        latency_ms=latency_ms,
-        first_token_ms=latency_ms,
-        is_streaming=False,
-        usage_missing=raw_usage is None,
-        created_at=created_at,
-    )
-    _load_cache()
+    if should_log:
+        insert_request_log(
+            request_id=request_id,
+            source_app="hermes",
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint="/v1/chat/completions",
+            request_model=request_model,
+            model=response_model,
+            raw_usage=raw_usage,
+            status_code=status_code,
+            error_message=error_message,
+            latency_ms=latency_ms,
+            first_token_ms=latency_ms,
+            is_streaming=False,
+            usage_missing=raw_usage is None,
+            created_at=created_at,
+        )
+        _load_cache()
     return Response(content=content, status_code=status_code, media_type=media_type)
 
 
@@ -904,6 +944,7 @@ async def _proxy_chat_stream(
     target_model: str,
     created_at: int,
     start_ts: float,
+    should_log: bool = True,
 ):
     import urllib.error
     import urllib.request
@@ -922,24 +963,25 @@ async def _proxy_chat_stream(
     except urllib.error.HTTPError as exc:
         content = exc.read()
         error_message = content.decode("utf-8", errors="ignore")[:1000]
-        insert_request_log(
-            request_id=request_id,
-            source_app="hermes",
-            provider_id=provider.id,
-            provider_name=provider.name,
-            endpoint="/v1/chat/completions",
-            request_model=request_model,
-            model=target_model,
-            raw_usage=None,
-            status_code=exc.code,
-            error_message=error_message,
-            latency_ms=int((time.perf_counter() - start_ts) * 1000),
-            first_token_ms=0,
-            is_streaming=True,
-            usage_missing=True,
-            created_at=created_at,
-        )
-        _load_cache()
+        if should_log:
+            insert_request_log(
+                request_id=request_id,
+                source_app="hermes",
+                provider_id=provider.id,
+                provider_name=provider.name,
+                endpoint="/v1/chat/completions",
+                request_model=request_model,
+                model=target_model,
+                raw_usage=None,
+                status_code=exc.code,
+                error_message=error_message,
+                latency_ms=int((time.perf_counter() - start_ts) * 1000),
+                first_token_ms=0,
+                is_streaming=True,
+                usage_missing=True,
+                created_at=created_at,
+            )
+            _load_cache()
         return Response(
             content=content,
             status_code=exc.code,
@@ -947,24 +989,25 @@ async def _proxy_chat_stream(
         )
     except Exception as exc:
         error_message = str(exc)
-        insert_request_log(
-            request_id=request_id,
-            source_app="hermes",
-            provider_id=provider.id,
-            provider_name=provider.name,
-            endpoint="/v1/chat/completions",
-            request_model=request_model,
-            model=target_model,
-            raw_usage=None,
-            status_code=502,
-            error_message=error_message,
-            latency_ms=int((time.perf_counter() - start_ts) * 1000),
-            first_token_ms=0,
-            is_streaming=True,
-            usage_missing=True,
-            created_at=created_at,
-        )
-        _load_cache()
+        if should_log:
+            insert_request_log(
+                request_id=request_id,
+                source_app="hermes",
+                provider_id=provider.id,
+                provider_name=provider.name,
+                endpoint="/v1/chat/completions",
+                request_model=request_model,
+                model=target_model,
+                raw_usage=None,
+                status_code=502,
+                error_message=error_message,
+                latency_ms=int((time.perf_counter() - start_ts) * 1000),
+                first_token_ms=0,
+                is_streaming=True,
+                usage_missing=True,
+                created_at=created_at,
+            )
+            _load_cache()
         return _openai_error(error_message, 502)
 
     status_code = upstream_resp.status
@@ -996,24 +1039,25 @@ async def _proxy_chat_stream(
             try:
                 upstream_resp.close()
             finally:
-                insert_request_log(
-                    request_id=request_id,
-                    source_app="hermes",
-                    provider_id=provider.id,
-                    provider_name=provider.name,
-                    endpoint="/v1/chat/completions",
-                    request_model=request_model,
-                    model=response_model,
-                    raw_usage=raw_usage,
-                    status_code=499 if error_message == "client_aborted" else status_code,
-                    error_message=error_message,
-                    latency_ms=latency_ms,
-                    first_token_ms=first_token_ms,
-                    is_streaming=True,
-                    usage_missing=raw_usage is None,
-                    created_at=created_at,
-                )
-                _load_cache()
+                if should_log:
+                    insert_request_log(
+                        request_id=request_id,
+                        source_app="hermes",
+                        provider_id=provider.id,
+                        provider_name=provider.name,
+                        endpoint="/v1/chat/completions",
+                        request_model=request_model,
+                        model=response_model,
+                        raw_usage=raw_usage,
+                        status_code=499 if error_message == "client_aborted" else status_code,
+                        error_message=error_message,
+                        latency_ms=latency_ms,
+                        first_token_ms=first_token_ms,
+                        is_streaming=True,
+                        usage_missing=raw_usage is None,
+                        created_at=created_at,
+                    )
+                    _load_cache()
 
     def _set_request_id(value: str):
         nonlocal request_id

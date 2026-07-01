@@ -173,6 +173,8 @@ def _mock_parsers(monkeypatch):
     )
     monkeypatch.setattr(srv, "get_available_models", _mock_get_available_models)
     monkeypatch.setattr(srv, "get_proxy_enabled", lambda: True)
+    monkeypatch.setattr(srv, "_ensure_agent_configs_match_proxy_state", lambda enabled: None)
+    monkeypatch.setattr(srv, "_toggle_agent_configs", lambda enabled: None)
     # 替换 MODEL_PRICING
     monkeypatch.setattr(
         srv, "MODEL_PRICING", SAMPLE_PRICING.copy()

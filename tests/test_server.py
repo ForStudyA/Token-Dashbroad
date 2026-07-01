@@ -462,6 +462,7 @@ class TestHermesProxyPassthrough:
             target_model,
             created_at,
             start_ts,
+            should_log=True,
         ):
             captured.update(
                 {
@@ -535,6 +536,7 @@ class TestHermesProxyPassthrough:
             target_model,
             created_at,
             start_ts,
+            should_log=True,
         ):
             captured.update(
                 {
@@ -573,6 +575,101 @@ class TestHermesProxyPassthrough:
         assert captured["request_model"] == "hermes-config-model"
         assert captured["target_model"] == "upstream-model"
         assert captured["provider"] is provider
+
+    def test_active_mapping_uses_target_provider_key_not_request_auth(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=2,
+            name="mapped",
+            base_url="http://mapped.test/v1",
+            api_key="mapped-key",
+            enabled=True,
+        )
+        captured = {}
+
+        async def fake_proxy_chat_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+            should_log=True,
+        ):
+            captured.update({"headers": headers, "provider": provider_arg})
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 2 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {
+                "mode": "mapping",
+                "target_model": "deepseek-v4-pro",
+                "provider_id": 2,
+                "mapping_id": 9,
+            },
+        )
+        monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer expired-xiaomi-key"},
+            json={"model": "mimo-v2.5", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 200
+        assert captured["headers"]["Authorization"] == "Bearer mapped-key"
+        assert captured["provider"] is provider
+
+    def test_disabled_proxy_forwards_without_logging(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        captured = {}
+
+        async def fake_proxy_chat_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+            should_log=True,
+        ):
+            captured.update(
+                {
+                    "upstream_url": upstream_url,
+                    "request_model": request_model,
+                    "target_model": target_model,
+                    "should_log": should_log,
+                    "provider": provider_arg,
+                }
+            )
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_proxy_enabled", lambda: False)
+        monkeypatch.setattr(srv, "get_provider_by_name", lambda name: None)
+        monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer live-xiaomi-key"},
+            json={"model": "mimo-v2.5", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 200
+        assert captured["upstream_url"] == "https://api.xiaomimimo.com/v1/chat/completions"
+        assert captured["request_model"] == "mimo-v2.5"
+        assert captured["target_model"] == "mimo-v2.5"
+        assert captured["should_log"] is False
+        assert captured["provider"].name == "mimo"
 
     def test_proxy_chat_json_logs_response_model(self, monkeypatch):
         import asyncio
@@ -654,6 +751,7 @@ class TestHermesProxyPassthrough:
             target_model,
             created_at,
             start_ts,
+            should_log=True,
         ):
             captured["upstream_body"] = upstream_body
             return JSONResponse({"ok": True})
@@ -860,8 +958,8 @@ class TestHermesProxyPassthrough:
         assert active["mode"] == ""
         assert active["provider_id"] == 0
 
-    def test_mimo_model_bypasses_ds_mapping(self, monkeypatch, client):
-        """Mimo models route to Xiaomi even when a DS mapping is active."""
+    def test_active_mapping_can_remap_mimo_model(self, monkeypatch, client):
+        """Active mappings take precedence over the MiMo compatibility fallback."""
         from fastapi.responses import JSONResponse
         from hermes_token_dash import server as srv
 
@@ -883,6 +981,7 @@ class TestHermesProxyPassthrough:
             target_model,
             created_at,
             start_ts,
+            should_log=True,
         ):
             captured.update(
                 {
@@ -896,10 +995,67 @@ class TestHermesProxyPassthrough:
             )
             return JSONResponse({"ok": True})
 
-        monkeypatch.setattr(srv, "get_default_provider", lambda: ds_provider)
         monkeypatch.setattr(srv, "get_provider_by_name", lambda name: None)
         monkeypatch.setattr(srv, "get_provider", lambda pid: ds_provider if pid == 1 else None)
-        monkeypatch.setattr(srv, "get_active_mapping", lambda: {"target_model": "deepseek-v4-flash", "provider_id": 1})
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {
+                "mode": "mapping",
+                "target_model": "deepseek-v4-flash",
+                "provider_id": 1,
+                "mapping_id": 8,
+            },
+        )
+        monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
+
+        resp = client.post(
+            "/v1/chat/completions",
+            json={"model": "mimo-v2.5", "messages": [], "stream": False},
+        )
+
+        assert resp.status_code == 200
+        assert captured["upstream_url"] == "http://deepseek.test/v1/chat/completions"
+        assert captured["upstream_body"]["model"] == "deepseek-v4-flash"
+        assert captured["request_model"] == "mimo-v2.5"
+        assert captured["target_model"] == "deepseek-v4-flash"
+        assert captured["provider"] is ds_provider
+
+    def test_mimo_model_falls_back_to_xiaomi_without_active_proxy(self, monkeypatch, client):
+        """MiMo compatibility still works when no explicit proxy route is active."""
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        captured = {}
+
+        async def fake_proxy_chat_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+            should_log=True,
+        ):
+            captured.update(
+                {
+                    "upstream_url": upstream_url,
+                    "upstream_body": upstream_body,
+                    "request_model": request_model,
+                    "target_model": target_model,
+                    "provider": provider_arg,
+                }
+            )
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_provider_by_name", lambda name: None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "", "target_model": "", "provider_id": 0, "mapping_id": 0},
+        )
         monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
 
         resp = client.post(

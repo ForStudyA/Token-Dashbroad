@@ -332,7 +332,7 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 <div><b>{{p.name}}</b><div class="proxy-muted">{{p.base_url}} · {{p.api_key?'已配置 Key':'未配置 Key'}}</div></div>
 <div class="provider-actions">
 <span v-if="providerInUse(p.id)" class="sbadge h" style="font-size:11px">使用中</span>
-<button class="btn-muted" style="font-size:11px" @click.stop="testProvider(p)">测试</button>
+<button class="btn-muted" style="font-size:11px" @click.stop="testProvider(p)" :disabled="isProviderTesting(p.id)">{{isProviderTesting(p.id)?'测试中...':'测试'}}</button>
 <button class="btn-muted" @click.stop="openProviderModal(p)">编辑</button>
 <button class="btn-muted" style="color:var(--red)" @click.stop="deleteProvider(p.id)">删除</button>
 </div>
@@ -409,6 +409,7 @@ const showDsKeyInput=ref(false),dsKeyInput=ref('')
 const view=ref('dashboard')
 const proxyProviders=ref([]),proxyMappings=ref([]),proxyLogs=ref([])
 const proxyEnabled=ref(true),proxyStatusSaving=ref(false)
+const providerTesting=ref({})
 const activeMapping=ref({mode:'',target_model:'',provider_id:0,mapping_id:0})
 const selectedProviderId=ref(0)
 const lastMappings=ref({})
@@ -525,12 +526,13 @@ function openProviderModal(p){if(p){providerForm.value={id:p.id,name:p.name,base
 function editProvider(p){openProviderModal(p)}
 function selectProvider(id){selectedProviderId.value=id}
 async function saveProvider(){if(!providerForm.value.name||!providerForm.value.base_url)return;const name=providerForm.value.name;await fetch('/api/proxy/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...providerForm.value,enabled:true})});showProviderForm.value=false;showProviderModal.value=false;resetProviderForm();await fetchProxyConfig();const p=proxyProviders.value.find(x=>x.name===name);if(p)selectedProviderId.value=p.id}
-function providerInUse(id){return activeMapping.value.provider_id===id&&(activeMapping.value.mode==='mapping'||activeMapping.value.mode==='passthrough')}
+function providerInUse(id){return activeMapping.value.mode==='mapping'&&activeMapping.value.provider_id===id}
 function mappingInUse(m){return activeMapping.value.mode==='mapping'&&activeMapping.value.mapping_id===m.id}
 async function toggleProviderEnabled(p){selectProvider(p.id)}
 async function toggleMappingEnabled(m){if(m.protected)return;await fetch('/api/proxy/mappings/'+m.id+'/toggle',{method:'POST'});await fetchProxyConfig()}
 async function togglePassthrough(){if(passthroughActive.value){await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:''})});await fetchProxyConfig();return}if(!selectedProviderId.value)return;await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'passthrough',provider_id:selectedProviderId.value})});await fetchProxyConfig()}
-async function testProvider(p){const old=modelMessage.value;modelMessage.value='测试 '+p.name+'...';try{const r=await fetch('/api/proxy/providers/'+p.id+'/test',{method:'POST'});const d=await r.json();alert((d.ok?'测试成功：':'测试失败：')+(d.message||'')+(d.model_count!=null?'，模型 '+d.model_count+' 个':''))}catch(e){alert('测试失败：'+e)}finally{modelMessage.value=old}}
+function isProviderTesting(id){return !!providerTesting.value[id]}
+async function testProvider(p){if(isProviderTesting(p.id))return;const old=modelMessage.value;providerTesting.value={...providerTesting.value,[p.id]:true};modelMessage.value='测试 '+p.name+'...';try{const r=await fetch('/api/proxy/providers/'+p.id+'/test',{method:'POST'});const d=await r.json();alert((d.ok?'测试成功：':'测试失败：')+(d.message||'')+(d.model_count!=null?'，模型 '+d.model_count+' 个':''))}catch(e){alert('测试失败：'+e)}finally{const next={...providerTesting.value};delete next[p.id];providerTesting.value=next;modelMessage.value=old}}
 function resetModelPicker(){remoteModels.value=[];selectedRemoteModels.value=[];modelMessage.value=''}
 async function fetchProviderModels(){if(!mappingForm.value.provider_id)return;modelLoading.value=true;modelMessage.value='';try{const r=await fetch('/api/proxy/providers/'+mappingForm.value.provider_id+'/models');const d=await r.json();remoteModels.value=d.models||[];selectedRemoteModels.value=[];modelMessage.value=d.ok?'获取到 '+remoteModels.value.length+' 个模型':(d.error||'获取失败')}catch(e){modelMessage.value='获取失败';remoteModels.value=[]}finally{modelLoading.value=false}}
 function editMapping(m){resetModelPicker();mappingForm.value={id:m.id,source_model:'*',target_model:m.target_model,provider_id:m.provider_id,enabled:true};showMappingModal.value=true}
@@ -587,6 +589,6 @@ watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer
 watch(timezoneFilter,()=>{const nextTz=Number(timezoneFilter.value);currentTime.value=new Date().toLocaleTimeString('zh-CN',{timeZone:tzIana(nextTz),hour:'2-digit',minute:'2-digit',second:'2-digit'});if(timeFilter.value==='custom'){syncPickersToTimezone(prevTimezone,nextTz);refreshView()}prevTimezone=nextTz})
 onUnmounted(()=>{if(timer)clearInterval(timer);if(clockTimer)clearInterval(clockTimer);if(fpStart.value)fpStart.value.destroy();if(fpEnd.value)fpEnd.value.destroy()})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,customStart,customEnd,lastRefresh,currentTime,isRefreshing,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,sourceLabel,sourceClass,displayModel,latencySec,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings,balance,reLoginMimo,dsBalance,showDsKeyInput,dsKeyInput,saveDsKey,onTimeFilterChange,view,proxyEnabled,proxyStatusSaving,saveProxyStatus,toggleProxyStatus,proxyProviders,proxyMappings,proxyLogs,activeMapping,selectedProviderId,passthroughActive,selectedPassthroughActive,visibleMappings,activeProxyLabel,lastMappings,showProviderForm,showProviderModal,showMappingForm,showMappingModal,providerForm,mappingForm,remoteModels,selectedRemoteModels,modelLoading,modelMessage,resetProviderForm,openProviderModal,editProvider,selectProvider,saveProvider,providerInUse,mappingInUse,toggleProviderEnabled,toggleMappingEnabled,togglePassthrough,testProvider,fetchProviderModels,deleteProvider,openMappingModal,editMapping,saveMapping,enableMapping,deleteMapping}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,customStart,customEnd,lastRefresh,currentTime,isRefreshing,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,modelPrices,sourceLabel,sourceClass,displayModel,latencySec,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings,balance,reLoginMimo,dsBalance,showDsKeyInput,dsKeyInput,saveDsKey,onTimeFilterChange,view,proxyEnabled,proxyStatusSaving,saveProxyStatus,toggleProxyStatus,proxyProviders,proxyMappings,proxyLogs,activeMapping,selectedProviderId,passthroughActive,selectedPassthroughActive,visibleMappings,activeProxyLabel,lastMappings,showProviderForm,showProviderModal,showMappingForm,showMappingModal,providerForm,mappingForm,remoteModels,selectedRemoteModels,modelLoading,modelMessage,resetProviderForm,openProviderModal,editProvider,selectProvider,saveProvider,providerInUse,mappingInUse,toggleProviderEnabled,toggleMappingEnabled,togglePassthrough,isProviderTesting,testProvider,fetchProviderModels,deleteProvider,openMappingModal,editMapping,saveMapping,enableMapping,deleteMapping}
 }}).mount('#app')
 </script></body></html>
