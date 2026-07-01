@@ -308,8 +308,8 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 </div>
 
 <div class="twrap" v-show="tab==='logs'">
-<div class="thdr"><span style="width:70px">来源</span><span style="width:150px">模型</span><span style="width:90px">输入</span><span style="width:90px">输出</span><span style="width:110px">费用</span><span style="width:70px">延迟</span><span style="width:50px">状态</span><span style="width:110px">时间 (UTC{{timezoneFilter>=0?'+':''}}{{timezoneFilter}})</span></div>
-<div class="row" v-for="l in logItems" :key="l.request_id"><span style="width:70px"><span class="sbadge" :class="sourceClass(l)">{{sourceLabel(l)}}</span></span><span class="trunc" style="width:150px" :title="displayModel(l)">{{displayModel(l)}}</span><span style="width:90px">{{fmt(l.input_tokens)}}</span><span style="width:90px">{{fmt(l.output_tokens)}}</span><span style="width:110px">¥{{(l.cost||0).toFixed(6)}}</span><span style="width:70px">{{latencySec(l.latency_ms)}}</span><span style="width:50px" :class="l.status_code===200?'g':'r'">{{l.status_code||'-'}}</span><span style="width:110px">{{stime(l.timestamp,timezoneFilter)}}</span></div>
+<div class="thdr"><span style="width:70px">来源</span><span style="width:220px">模型</span><span style="width:90px">输入</span><span style="width:90px">输出</span><span style="width:110px">费用</span><span style="width:70px">延迟</span><span style="width:50px">状态</span><span style="width:110px">时间 (UTC{{timezoneFilter>=0?'+':''}}{{timezoneFilter}})</span></div>
+<div class="row" v-for="l in logItems" :key="l.request_id"><span style="width:70px"><span class="sbadge" :class="sourceClass(l)">{{sourceLabel(l)}}</span></span><span class="trunc" style="width:220px" :title="displayModel(l)">{{displayModel(l)}}</span><span style="width:90px">{{fmt(l.input_tokens)}}</span><span style="width:90px">{{fmt(l.output_tokens)}}</span><span style="width:110px">¥{{(l.cost||0).toFixed(6)}}</span><span style="width:70px">{{latencySec(l.latency_ms)}}</span><span style="width:50px" :class="l.status_code===200?'g':'r'">{{l.status_code||'-'}}</span><span style="width:110px">{{stime(l.timestamp,timezoneFilter)}}</span></div>
 <div class="paginate" v-if="logTotal>logLimit"><button :disabled="logPage<=1" @click="logPage--;fetchLogs()">‹</button><span>{{logPage}}/{{Math.ceil(logTotal/logLimit)}} ({{logTotal}}条)</span><button :disabled="logPage>=Math.ceil(logTotal/logLimit)" @click="logPage++;fetchLogs()">›</button></div>
 <div class="empty" v-if="!logItems.length&&!logLoading">暂无日志</div>
 <div class="empty" v-if="logLoading">加载中...</div>
@@ -353,8 +353,8 @@ span.flatpickr-weekday{font-size:10px!important;background:var(--surface)!import
 </div>
 <div class="proxy-panel">
 <h2>最近请求</h2>
-<div class="thdr"><span style="width:70px">来源</span><span style="width:150px">模型</span><span style="width:90px">输入</span><span style="width:90px">输出</span><span style="width:110px">费用</span><span style="width:70px">延迟</span><span style="width:50px">状态</span><span style="width:110px">时间 (UTC{{timezoneFilter>=0?'+':''}}{{timezoneFilter}})</span></div>
-<div class="row" v-for="l in proxyLogs.slice(0,20)" :key="l.request_id"><span style="width:70px"><span class="sbadge" :class="sourceClass(l)">{{sourceLabel(l)}}</span></span><span class="trunc" style="width:150px" :title="displayModel(l)">{{displayModel(l)}}</span><span style="width:90px">{{fmt((l.input_tokens||0)+(l.cache_read_tokens||0))}}</span><span style="width:90px">{{fmt(l.output_tokens)}}</span><span style="width:110px">¥{{Number(l.total_cost_cny||0).toFixed(6)}}</span><span style="width:70px">{{latencySec(l.latency_ms)}}</span><span style="width:50px" :class="l.status_code===200?'g':'r'">{{l.status_code||'-'}}</span><span style="width:110px">{{stime(l.created_at_iso,timezoneFilter)}}</span></div>
+<div class="thdr"><span style="width:70px">来源</span><span style="width:220px">模型</span><span style="width:90px">输入</span><span style="width:90px">输出</span><span style="width:110px">费用</span><span style="width:70px">延迟</span><span style="width:50px">状态</span><span style="width:110px">时间 (UTC{{timezoneFilter>=0?'+':''}}{{timezoneFilter}})</span></div>
+<div class="row" v-for="l in proxyLogs.slice(0,20)" :key="l.request_id"><span style="width:70px"><span class="sbadge" :class="sourceClass(l)">{{sourceLabel(l)}}</span></span><span class="trunc" style="width:220px" :title="displayModel(l)">{{displayModel(l)}}</span><span style="width:90px">{{fmt((l.input_tokens||0)+(l.cache_read_tokens||0))}}</span><span style="width:90px">{{fmt(l.output_tokens)}}</span><span style="width:110px">¥{{Number(l.total_cost_cny||0).toFixed(6)}}</span><span style="width:70px">{{latencySec(l.latency_ms)}}</span><span style="width:50px" :class="l.status_code===200?'g':'r'">{{l.status_code||'-'}}</span><span style="width:110px">{{stime(l.created_at_iso,timezoneFilter)}}</span></div>
 <div class="empty" v-if="!proxyLogs.length">暂无代理请求</div>
 </div>
 </div>
@@ -427,7 +427,7 @@ const sorted=computed(()=>{let a=[...merged.value];a.sort((x,y)=>{let vx=x[sf.va
 const passthroughActive=computed(()=>activeMapping.value.mode==='passthrough')
 const selectedPassthroughActive=computed(()=>activeMapping.value.mode==='passthrough'&&activeMapping.value.provider_id===selectedProviderId.value)
 const visibleMappings=computed(()=>proxyMappings.value.filter(m=>!m.protected&&(!selectedProviderId.value||m.provider_id===selectedProviderId.value)))
-const activeProxyLabel=computed(()=>activeMapping.value.mode==='passthrough'?'原样转发':(activeMapping.value.target_model||''))
+const activeProxyLabel=computed(()=>{if(!proxyEnabled.value)return '';return activeMapping.value.mode==='passthrough'?'原样转发':(activeMapping.value.target_model||'')})
 
 function fmt(n){if(n==null)return'0';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return String(n)}
 function hitColor(v){if(v===0)return'';return v>=80?'g':v>=40?'y':'r'}
@@ -526,8 +526,8 @@ function openProviderModal(p){if(p){providerForm.value={id:p.id,name:p.name,base
 function editProvider(p){openProviderModal(p)}
 function selectProvider(id){selectedProviderId.value=id}
 async function saveProvider(){if(!providerForm.value.name||!providerForm.value.base_url)return;const name=providerForm.value.name;await fetch('/api/proxy/providers',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...providerForm.value,enabled:true})});showProviderForm.value=false;showProviderModal.value=false;resetProviderForm();await fetchProxyConfig();const p=proxyProviders.value.find(x=>x.name===name);if(p)selectedProviderId.value=p.id}
-function providerInUse(id){return activeMapping.value.mode==='mapping'&&activeMapping.value.provider_id===id}
-function mappingInUse(m){return activeMapping.value.mode==='mapping'&&activeMapping.value.mapping_id===m.id}
+function providerInUse(id){return proxyEnabled.value&&activeMapping.value.mode==='mapping'&&activeMapping.value.provider_id===id}
+function mappingInUse(m){return proxyEnabled.value&&activeMapping.value.mode==='mapping'&&activeMapping.value.mapping_id===m.id}
 async function toggleProviderEnabled(p){selectProvider(p.id)}
 async function toggleMappingEnabled(m){if(m.protected)return;await fetch('/api/proxy/mappings/'+m.id+'/toggle',{method:'POST'});await fetchProxyConfig()}
 async function togglePassthrough(){if(passthroughActive.value){await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:''})});await fetchProxyConfig();return}if(!selectedProviderId.value)return;await fetch('/api/proxy/active-mapping',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:'passthrough',provider_id:selectedProviderId.value})});await fetchProxyConfig()}
